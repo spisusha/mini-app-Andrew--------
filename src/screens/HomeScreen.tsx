@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useCatalogStore } from '../store/catalogStore';
 import type { Category, SortOption, ProductFamily } from '../domain/types';
+import { ALL_CATEGORIES } from '../domain/types';
 import { getMinPrice } from '../domain/catalogLogic';
 import ProductCard from '../components/ProductCard';
 import CategoryFilter from '../components/CategoryFilter';
@@ -8,9 +10,19 @@ import SortBar from '../components/SortBar';
 import Loader from '../components/Loader';
 import './HomeScreen.css';
 
+function catFromParam(val: string | null): Category | null {
+  if (!val) return null;
+  return ALL_CATEGORIES.find((c) => c.toLowerCase() === val.toLowerCase()) ?? null;
+}
+
 export default function HomeScreen() {
   const { families, variants, loading, load, sort, setSort } = useCatalogStore();
-  const [category, setCategory] = useState<Category | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const category = catFromParam(searchParams.get('cat'));
+
+  const setCategory = useCallback((c: Category | null) => {
+    setSearchParams(c ? { cat: c } : {}, { replace: true });
+  }, [setSearchParams]);
 
   useEffect(() => { load(); }, [load]);
 

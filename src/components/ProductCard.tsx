@@ -17,6 +17,13 @@ function buildSkuSubtitle(v: Variant, category: Category): string {
     if (opts.simType) parts.push(String(opts.simType));
     return parts.join(' • ');
   }
+  if (category === 'iPad') {
+    const parts: string[] = [];
+    if (opts.storage) parts.push(formatStorage(Number(opts.storage)));
+    if (opts.colorLabel) parts.push(String(opts.colorLabel));
+    if (opts.connectivity) parts.push(String(opts.connectivity));
+    return parts.join(' • ');
+  }
   return '';
 }
 

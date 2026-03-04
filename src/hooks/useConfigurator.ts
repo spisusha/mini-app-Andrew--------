@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Variant } from '../domain/types';
 
 export const CONF_COLOR_KEYS = new Set(['color', 'colorHex', 'colorLabel']);
-export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market', '_xmlid_audit']);
+export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market', '_xmlid_audit', 'chip', 'model']);
 
 export interface ColorEntry {
   color: string;
@@ -38,7 +38,7 @@ function variantToOpts(v: Variant): Record<string, string | undefined> {
   const opts: Record<string, string | undefined> = {};
   for (const [k, val] of Object.entries(v.options)) {
     if (CONF_SERVICE_KEYS.has(k)) continue;
-    if (val) opts[k] = val;
+    if (val != null && val !== '') opts[k] = String(val);
   }
   return opts;
 }
@@ -57,7 +57,7 @@ function findVariant(
 ): Variant | null {
   const entries = Object.entries(opts).filter(([, v]) => !!v);
   if (!entries.length) return null;
-  return variants.find((v) => entries.every(([k, val]) => v.options[k] === val)) ?? null;
+  return variants.find((v) => entries.every(([k, val]) => String(v.options[k] ?? '') === String(val))) ?? null;
 }
 
 function pickBestVariant(
@@ -65,20 +65,21 @@ function pickBestVariant(
   required: Record<string, string>,
   preferred: Array<[string, string | undefined]>,
 ): Variant | null {
+  const eq = (a: unknown, b: unknown) => String(a ?? '') === String(b ?? '');
   const prefDefined = preferred.filter((p): p is [string, string] => p[1] !== undefined);
   const inStock = variants.filter(
-    (v) => v.in_stock && Object.entries(required).every(([k, val]) => v.options[k] === val),
+    (v) => v.in_stock && Object.entries(required).every(([k, val]) => eq(v.options[k], val)),
   );
 
   if (inStock.length) {
     for (let take = prefDefined.length; take >= 0; take--) {
       const active = prefDefined.slice(0, take);
-      const match = inStock.find((v) => active.every(([k, val]) => v.options[k] === val));
+      const match = inStock.find((v) => active.every(([k, val]) => eq(v.options[k], val)));
       if (match) return match;
     }
   }
 
-  return variants.find((v) => Object.entries(required).every(([k, val]) => v.options[k] === val)) ?? null;
+  return variants.find((v) => Object.entries(required).every(([k, val]) => eq(v.options[k], val))) ?? null;
 }
 
 export function useConfigurator(variants: Variant[], familyImages: string[]): ConfiguratorState {
@@ -103,20 +104,24 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
     return [...seen.values()];
   }, [variants, hasColorOptions]);
 
+  const OPTION_ORDER = ['storage', 'simType', 'connectivity', 'size'];
+
   const nonColorKeys = useMemo(() => {
-    const keys = new Set<string>();
-    variants.forEach((v) =>
-      Object.keys(v.options).forEach((k) => {
-        if (v.options[k] && !CONF_COLOR_KEYS.has(k) && !CONF_SERVICE_KEYS.has(k)) keys.add(k);
-      }),
-    );
-    return [...keys];
+    const present = new Set<string>();
+    for (const v of variants) {
+      for (const k of Object.keys(v.options)) {
+        if (v.options[k] && !CONF_COLOR_KEYS.has(k) && !CONF_SERVICE_KEYS.has(k)) present.add(k);
+      }
+    }
+    const ordered = OPTION_ORDER.filter((k) => present.has(k));
+    for (const k of present) { if (!ordered.includes(k)) ordered.push(k); }
+    return ordered;
   }, [variants]);
 
   const allOptionValues = useMemo(() => {
     const result: Record<string, string[]> = {};
     for (const key of nonColorKeys) {
-      const raw = variants.map((v) => v.options[key]).filter((v): v is string => !!v);
+      const raw = variants.map((v) => v.options[key]).filter((v) => v != null && v !== '').map((v) => String(v));
       if (key === 'storage') {
         const nums = [...new Set(raw.map((v) => String(parseInt(v) || v)))];
         result[key] = nums.sort((a, b) => Number(a) - Number(b));
@@ -127,15 +132,17 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
     return result;
   }, [variants, nonColorKeys]);
 
-  // SIM depends only on color; storage depends on color+SIM; others check all
   const OPTION_DEPS: Record<string, string[]> = {
     simType: [],
     storage: ['simType'],
+    connectivity: [],
+    size: [],
   };
 
   const disabledOptionValues = useMemo(() => {
     const result: Record<string, string[]> = {};
     const colorHex = selectedOptions.colorHex;
+    const s = (a: unknown) => String(a ?? '');
 
     for (const key of nonColorKeys) {
       const allVals = allOptionValues[key] ?? [];
@@ -143,18 +150,18 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
 
       result[key] = allVals.filter((val) =>
         !variants.some((v) => {
-          if (!v.in_stock || v.options[key] !== val) return false;
-          if (colorHex && v.options.colorHex !== colorHex) return false;
+          if (!v.in_stock || s(v.options[key]) !== val) return false;
+          if (colorHex && s(v.options.colorHex) !== colorHex) return false;
 
           if (deps !== undefined) {
             for (const dk of deps) {
               const sv = selectedOptions[dk];
-              if (sv && v.options[dk] !== sv) return false;
+              if (sv && s(v.options[dk]) !== sv) return false;
             }
           } else {
             for (const [k, sv] of Object.entries(selectedOptions)) {
               if (k === key || CONF_COLOR_KEYS.has(k) || !sv) continue;
-              if (v.options[k] !== sv) return false;
+              if (s(v.options[k]) !== sv) return false;
             }
           }
           return true;
@@ -175,7 +182,7 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
   const resolvedVariant = useMemo(() => {
     const entries = Object.entries(selectedOptions).filter(([, v]) => !!v);
     if (!entries.length) return null;
-    return variants.find((v) => entries.every(([k, val]) => v.options[k] === val)) ?? null;
+    return variants.find((v) => entries.every(([k, val]) => String(v.options[k] ?? '') === String(val))) ?? null;
   }, [variants, selectedOptions]);
 
   // Persist last good (in_stock) non-color combo per color

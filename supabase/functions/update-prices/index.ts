@@ -151,6 +151,97 @@ function parseAirPods(desc: string): ParsedAirPods | null {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// ── IPAD PARSER ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+const IPAD_ACC = /pencil|keyboard|клавиатура|чехол|case|folio|smart\s*cover|magic|adapter|адаптер|charger|заряд|usb|cable|кабел/i;
+interface ParsedIPad { familyTitle: string; storage?: string; connectivity?: string; size?: string; chip?: string; colorLabel?: string; colorHex?: string; colorKey?: string }
+
+const IPAD_FAMILY_PATTERNS: [RegExp, string][] = [
+  [/iPad\s+Pro\s+13/i, 'Apple iPad Pro 13'],
+  [/iPad\s+Pro\s+11/i, 'Apple iPad Pro 11'],
+  [/iPad\s+Air\s+7/i, 'Apple iPad Air 7'],
+  [/iPad\s+Air\s+6/i, 'Apple iPad Air 6'],
+  [/iPad\s+Air\s+13/i, 'Apple iPad Air 13'],
+  [/iPad\s+Air\s+11/i, 'Apple iPad Air 11'],
+  [/iPad\s+mini\s*7/i, 'Apple iPad mini 7'],
+  [/iPad\s+mini\s*6/i, 'Apple iPad mini 6'],
+  [/iPad\s+\(?A16\)?/i, 'Apple iPad (A16)'],
+  [/iPad\s+10/i, 'Apple iPad 10'],
+  [/iPad\s+Air\b/i, 'Apple iPad Air'],
+  [/iPad\s+Pro\b/i, 'Apple iPad Pro'],
+  [/iPad\s+mini\b/i, 'Apple iPad mini'],
+  [/iPad\b/i, 'Apple iPad'],
+];
+
+const IPAD_COLORS: Record<string, [string, string]> = {
+  'space black': ['space_black', '#1D1D1F'],
+  'space gray': ['space_gray', '#8D8D92'],
+  'space grey': ['space_gray', '#8D8D92'],
+  silver: ['silver', '#C0C0C0'],
+  starlight: ['starlight', '#F0E8D8'],
+  blue: ['blue', '#3478F6'],
+  purple: ['purple', '#8B72BE'],
+  pink: ['pink', '#F2A9B7'],
+  yellow: ['yellow', '#F9E87C'],
+  white: ['white', '#F5F5F5'],
+  black: ['black', '#111111'],
+  gold: ['gold', '#D4AF37'],
+  'rose gold': ['rose_gold', '#B76E79'],
+  midnight: ['midnight', '#1E1E2E'],
+};
+
+function parseIPad(desc: string): ParsedIPad | null {
+  let familyTitle = '';
+  for (const [re, title] of IPAD_FAMILY_PATTERNS) {
+    if (re.test(desc)) { familyTitle = title; break; }
+  }
+  if (!familyTitle) return null;
+
+  const storageMatch = desc.match(/\b(\d+)\s*(?:GB|ГБ|TB|ТБ)\b/i);
+  let storage: string | undefined;
+  if (storageMatch) {
+    const num = parseInt(storageMatch[1]);
+    const isTb = /tb|тб/i.test(storageMatch[0]);
+    storage = String(isTb ? num * 1024 : num);
+  }
+
+  let connectivity: string | undefined;
+  if (/\bLTE\b|cellular|сотовая/i.test(desc)) connectivity = 'LTE';
+  else if (/\bwifi\b|wi-fi/i.test(desc)) connectivity = 'WiFi';
+
+  let size: string | undefined;
+  const sizeMatch = desc.match(/\b(11|13|10[.,]?\d?|12[.,]9|8[.,]3)\s*["''″]?\s*(?:inch|дюйм)?/i);
+  if (sizeMatch) size = sizeMatch[1].replace(',', '.');
+
+  let chip: string | undefined;
+  const chipMatch = desc.match(/\b(M[1-4]|A1[4-9]|A\d{2})\b/i);
+  if (chipMatch) chip = chipMatch[1].toUpperCase();
+
+  const cleaned = desc
+    .replace(/\s+LL\/A$/i, '')
+    .replace(/\s+(EU|JP|US|CN|HK|KR|IN|TH|VN|MY|SG|ZA|ZP|KH|LL)$/i, '')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\b\d+\s*(?:GB|ГБ|TB|ТБ)\b/i, '')
+    .replace(/\biPad\b.*?(Pro|Air|mini|A16|\d+)\s*/i, '')
+    .trim();
+
+  let colorLabel: string | undefined;
+  let colorHex: string | undefined;
+  let colorKey: string | undefined;
+  const cl = cleaned.toLowerCase();
+  for (const [pattern, [key, hex]] of Object.entries(IPAD_COLORS)) {
+    if (cl.includes(pattern)) {
+      colorLabel = pattern.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+      colorHex = hex;
+      colorKey = key;
+      break;
+    }
+  }
+
+  return { familyTitle, storage, connectivity, size, chip, colorLabel, colorHex, colorKey };
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // ── HELPERS ─────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 function normalizeXmlid(raw: string): string { return raw.replace(/^0+/, '') || '0'; }
@@ -190,8 +281,8 @@ Deno.serve(async (req) => {
     const watchReport = { updatedCount: 0, createdCount: 0 };
     const airpodsReport = { updatedCount: 0, createdCount: 0 };
     const airpodsMaxReport = { matchedCount: 0, boundXmlidCount: 0, createdCount: 0, notFoundCount: 0, examples: [] as NotFoundEntry[] };
+    const ipadReport = { updatedCount: 0, createdCount: 0, dedupHits: 0, notFoundCount: 0, examples: [] as NotFoundEntry[] };
     const otherReport = { updatedCount: 0, notFoundCount: 0 };
-    let skippedIpadCount = 0;
     let skippedMacCount = 0;
     const allNotFound: NotFoundEntry[] = [];
 
@@ -199,11 +290,11 @@ Deno.serve(async (req) => {
     const iphoneItems: (PriceItem & { parsed: ParsedIphone })[] = [];
     const watchItems: (PriceItem & { parsed: ParsedWatch })[] = [];
     const airpodsItems: (PriceItem & { parsed: ParsedAirPods })[] = [];
+    const ipadItems: (PriceItem & { parsed: ParsedIPad })[] = [];
     const otherItems: PriceItem[] = [];
 
     for (const item of items) {
       if (item.categoryGuess === 'iphone') {
-        // Skip old iPhones (12-15, SE) silently
         if (OLD_IPHONE_RE.test(item.description.trim())) {
           iphoneReport.skippedOldCount++;
           continue;
@@ -215,6 +306,15 @@ Deno.serve(async (req) => {
           allNotFound.push(nf); iphoneReport.notFoundCount++;
           if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
         }
+      } else if (item.categoryGuess === 'ipad' || /\bipad\b/i.test(item.description)) {
+        if (IPAD_ACC.test(item.description)) continue;
+        const p = parseIPad(item.description);
+        if (p) ipadItems.push({ ...item, parsed: p });
+        else {
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' };
+          allNotFound.push(nf); ipadReport.notFoundCount++;
+          if (ipadReport.examples.length < 10) ipadReport.examples.push(nf);
+        }
       } else if (/apple\s*watch/i.test(item.description)) {
         if (WACC.test(item.description)) continue;
         const p = parseWatch(item.description);
@@ -225,16 +325,14 @@ Deno.serve(async (req) => {
         const p = parseAirPods(item.description);
         if (p) airpodsItems.push({ ...item, parsed: p });
         else allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' });
-      } else if (item.categoryGuess === 'ipad' || /\bipad\b/i.test(item.description)) {
-        skippedIpadCount++;
       } else if (item.categoryGuess === 'macbook' || item.categoryGuess === 'mac' || /\b(macbook|mac\s?book|imac|mac\s?mini|mac\s?pro|mac\s?studio)\b/i.test(item.description)) {
         skippedMacCount++;
       } else { otherItems.push(item); }
     }
-    L('split', `iphone=${iphoneItems.length} watch=${watchItems.length} airpods=${airpodsItems.length} other=${otherItems.length} skippedOldIphone=${iphoneReport.skippedOldCount} skippedIpad=${skippedIpadCount} skippedMac=${skippedMacCount} parseFails=${allNotFound.length}`);
+    L('split', `iphone=${iphoneItems.length} ipad=${ipadItems.length} watch=${watchItems.length} airpods=${airpodsItems.length} other=${otherItems.length} skippedOldIphone=${iphoneReport.skippedOldCount} skippedMac=${skippedMacCount} parseFails=${allNotFound.length}`);
 
     const verifyXmlids: string[] = [];
-    for (const arr of [iphoneItems as PriceItem[], watchItems, airpodsItems]) {
+    for (const arr of [iphoneItems as PriceItem[], ipadItems, watchItems, airpodsItems]) {
       for (const it of arr) { if (verifyXmlids.length < 5) verifyXmlids.push(it.xmlid); }
     }
 
@@ -248,7 +346,7 @@ Deno.serve(async (req) => {
     if (isSyncStock) {
       const t1 = Date.now();
       const { data: fams, error: famErr } = await supabase
-        .from('product_families').select('id').in('category', ['iphone', 'watch', 'airpods']);
+        .from('product_families').select('id').in('category', ['iphone', 'watch', 'airpods', 'ipad']);
 
       if (famErr) { L('disable_all', `ERROR: ${famErr.message}`); errors.push(`CRITICAL fetch families: ${famErr.message}`); }
 
@@ -513,6 +611,131 @@ Deno.serve(async (req) => {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ── PHASE 3B: IPAD (like Watch — match by xmlid, auto-create) ──
+    // ════════════════════════════════════════════════════════════════
+    if (ipadItems.length > 0) {
+      const tIpad = Date.now();
+      const ipTitles = [...new Set(ipadItems.map(i => i.parsed.familyTitle))];
+      const { data: ipFams } = await supabase.from('product_families').select('id, title').in('category', ['ipad']);
+      const ipMap = new Map<string, string>(); for (const f of ipFams || []) ipMap.set(f.title, f.id);
+
+      const ixAll = ipadItems.map(i => i.xmlid);
+      const ixExp = [...new Set([...ixAll, ...ixAll.map(normalizeXmlid)])];
+      const iExRows: any[] = [];
+      for (let i = 0; i < ixExp.length; i += 200) {
+        const b = ixExp.slice(i, i + 200);
+        const { data } = await supabase.from('variants').select('id, family_id, options, supplier_xmlid').in('supplier_xmlid', b);
+        if (data) iExRows.push(...data);
+      }
+      const iExMap = new Map<string, { id: string; family_id: string; options: Record<string, unknown> }>();
+      for (const v of iExRows) iExMap.set(normalizeXmlid(v.supplier_xmlid), { id: v.id, family_id: v.family_id, options: v.options || {} });
+
+      // Load all iPad variants for dedup checks
+      const allIpadFids = [...new Set([...ipMap.values()])];
+      let allIpadVariants: any[] = [];
+      for (let i = 0; i < allIpadFids.length; i += 50) {
+        const batch = allIpadFids.slice(i, i + 50);
+        const { data } = await supabase.from('variants').select('id, family_id, options, supplier_xmlid').in('family_id', batch);
+        if (data) allIpadVariants.push(...data);
+      }
+
+      for (const item of ipadItems) {
+        const nx = normalizeXmlid(item.xmlid);
+        const ex = iExMap.get(nx);
+        if (ex) {
+          const up: Record<string, unknown> = {
+            price: item.price,
+            supplier_xmlid: item.xmlid,
+            options: { ...ex.options, raw: item.description, supplierTitle: item.description },
+            updated_at: now,
+          };
+          if (isSyncStock) up.in_stock = true;
+          const { error: e } = await supabase.from('variants').update(up).eq('id', ex.id);
+          if (!e) { updatedPricesCount++; ipadReport.updatedCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`iPad update: ${e.message}`);
+          continue;
+        }
+
+        // Resolve family
+        let fid = ipMap.get(item.parsed.familyTitle);
+        if (!fid) {
+          // Try partial match on existing families
+          for (const [title, id] of ipMap) {
+            if (title.includes(item.parsed.familyTitle.replace('Apple ', '')) || item.parsed.familyTitle.includes(title.replace('Apple ', ''))) {
+              fid = id; break;
+            }
+          }
+        }
+        if (!fid) {
+          // Auto-create family
+          const { data: newFam, error: fErr } = await supabase.from('product_families').insert({
+            category: 'ipad', title: item.parsed.familyTitle, description: '', images: [], popularity_score: 0,
+          }).select('id').single();
+          if (fErr || !newFam) {
+            errors.push(`iPad create family "${item.parsed.familyTitle}": ${fErr?.message}`);
+            const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'no_family' };
+            allNotFound.push(nf); ipadReport.notFoundCount++;
+            if (ipadReport.examples.length < 10) ipadReport.examples.push(nf);
+            continue;
+          }
+          fid = newFam.id;
+          ipMap.set(item.parsed.familyTitle, fid);
+          L('ipad', `Created family "${item.parsed.familyTitle}" id=${fid}`);
+        }
+
+        // Dedup: check if variant with same key options already exists
+        const p = item.parsed;
+        const dedupMatch = allIpadVariants.find((v: any) => {
+          if (v.family_id !== fid) return false;
+          const o = v.options as Record<string, string>;
+          if (p.storage && o.storage !== p.storage) return false;
+          if (p.connectivity && o.connectivity !== p.connectivity) return false;
+          if (p.colorKey && (o.color || '').toLowerCase() !== p.colorKey) return false;
+          return true;
+        });
+
+        if (dedupMatch) {
+          const up: Record<string, unknown> = {
+            price: item.price,
+            supplier_xmlid: item.xmlid,
+            options: { ...(dedupMatch.options as Record<string, unknown>), raw: item.description, supplierTitle: item.description },
+            updated_at: now,
+          };
+          if (isSyncStock) up.in_stock = true;
+          const { error: e } = await supabase.from('variants').update(up).eq('id', dedupMatch.id);
+          if (!e) { updatedPricesCount++; ipadReport.dedupHits++; if (isSyncStock) setInStockTrueCount++; iExMap.set(nx, dedupMatch); }
+          else errors.push(`iPad dedup-bind: ${e.message}`);
+          continue;
+        }
+
+        // Auto-create variant
+        const newOpts: Record<string, unknown> = { raw: item.description, supplierTitle: item.description };
+        if (p.storage) newOpts.storage = p.storage;
+        if (p.connectivity) newOpts.connectivity = p.connectivity;
+        if (p.size) newOpts.size = p.size;
+        if (p.chip) newOpts.chip = p.chip;
+        if (p.colorLabel) { newOpts.colorLabel = p.colorLabel; newOpts.colorHex = p.colorHex || '#888888'; newOpts.color = p.colorKey || colorToSnake(p.colorLabel); }
+        const skuParts = ['ipad', p.storage || 'x', p.connectivity || 'x', p.colorKey || 'x', item.xmlid].join('-');
+
+        const { error: cErr } = await supabase.from('variants').insert({
+          family_id: fid, options: newOpts, images: [], price: item.price,
+          in_stock: isSyncStock, sku_code: skuParts, supplier_xmlid: item.xmlid,
+        });
+        if (!cErr) {
+          createdCount++; ipadReport.createdCount++;
+          if (isSyncStock) setInStockTrueCount++;
+          allIpadVariants.push({ id: 'new-' + item.xmlid, family_id: fid, options: newOpts, supplier_xmlid: item.xmlid });
+        } else {
+          errors.push(`iPad create variant: ${cErr.message}`);
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'create_error' };
+          allNotFound.push(nf); ipadReport.notFoundCount++;
+          if (ipadReport.examples.length < 10) ipadReport.examples.push(nf);
+        }
+      }
+      L('ipad', `Done ${ms(tIpad)}ms. updated=${ipadReport.updatedCount} created=${ipadReport.createdCount} dedup=${ipadReport.dedupHits} nf=${ipadReport.notFoundCount}`);
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ── PHASE 4: AIRPODS ────────────────────────────────────────────
     // ════════════════════════════════════════════════════════════════
     if (airpodsItems.length > 0) {
@@ -692,7 +915,7 @@ Deno.serve(async (req) => {
 
     const ok = !(isSyncStock && disableAllAppleCount === 0) && iphoneCreateBudget >= 0;
 
-    L('done', `Total ${ms(T0)}ms. ok=${ok} prices=${updatedPricesCount} true=${setInStockTrueCount} false=${setInStockFalseCount} created=${createdCount} iphoneCreated=${iphoneReport.createdCount} nf=${allNotFound.length}`);
+    L('done', `Total ${ms(T0)}ms. ok=${ok} prices=${updatedPricesCount} true=${setInStockTrueCount} false=${setInStockFalseCount} created=${createdCount} iphoneCreated=${iphoneReport.createdCount} ipadCreated=${ipadReport.createdCount} nf=${allNotFound.length}`);
 
     return new Response(JSON.stringify({
       ok, requestId, mode,
@@ -701,8 +924,8 @@ Deno.serve(async (req) => {
       appleRows: items.filter(i => i.categoryGuess !== 'other').length,
       updatedPricesCount, setInStockTrueCount, setInStockFalseCount, createdCount,
       notFoundCount: allNotFound.length,
-      skippedIpadCount, skippedMacCount,
-      iphone: iphoneReport, watch: watchReport, airpods: airpodsReport, airpodsMax: airpodsMaxReport, other: otherReport,
+      skippedMacCount,
+      iphone: iphoneReport, ipad: ipadReport, watch: watchReport, airpods: airpodsReport, airpodsMax: airpodsMaxReport, other: otherReport,
       topNotFoundExamples: allNotFound.slice(0, 20),
       verify, errors,
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

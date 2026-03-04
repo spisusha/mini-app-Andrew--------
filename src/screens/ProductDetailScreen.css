@@ -179,3 +179,13 @@
 .watch-specs__list li:last-child {
   border-bottom: none;
 }
+
+.detail-chip-info {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin: 4px 0 8px;
+  padding: 6px 12px;
+  background: var(--color-surface);
+  border-radius: var(--radius-sm, 6px);
+  display: inline-block;
+}

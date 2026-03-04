@@ -8,12 +8,10 @@ import Loader from '../components/Loader';
 import './ProductDetailScreen.css';
 
 const OPTION_LABELS: Record<string, string> = {
-  model: 'Модель',
   storage: 'Память',
   simType: 'SIM',
   connectivity: 'Связь',
   size: 'Размер',
-  chip: 'Чип',
   anc: 'Шумоподавление',
 };
 
@@ -122,6 +120,10 @@ export default function ProductDetailScreen() {
           />
         ))}
       </div>
+
+      {resolvedVariant?.options?.chip && (
+        <p className="detail-chip-info">Чип: {resolvedVariant.options.chip}</p>
+      )}
 
       <div className="detail-price-section">
         {resolvedVariant ? (
