@@ -1,3 +1,33 @@
+.home-ticker {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  overflow: hidden;
+  background: var(--color-primary-light);
+  backdrop-filter: blur(8px);
+  padding: 8px 0;
+  margin: 0 -16px 14px;
+}
+
+.home-ticker__track {
+  display: flex;
+  width: max-content;
+  animation: ticker 18s linear infinite;
+}
+
+.home-ticker__track span {
+  flex-shrink: 0;
+  padding: 0 48px;
+  font-size: 12.5px;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+@keyframes ticker {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
 .product-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

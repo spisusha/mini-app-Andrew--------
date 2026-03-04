@@ -61,6 +61,12 @@ export default function CartScreen() {
         <span className="cart-total__value">{total().toLocaleString('ru-RU')} ₽</span>
       </div>
 
+      <p className="cart-price-note">
+        ℹ️ Мы стараемся держать цены актуальными, но из-за высокой волатильности
+        рынка цены на сайте носят информативный характер. Менеджер зафиксирует для
+        вас лучшее предложение после размещения заказа!
+      </p>
+
       <button className="btn btn-primary btn-block" onClick={() => navigate('/checkout')}>
         Оформить заказ
       </button>

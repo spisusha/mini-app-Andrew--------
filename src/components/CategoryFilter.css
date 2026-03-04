@@ -1,10 +1,8 @@
 .cat-filter {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 4px;
   margin-bottom: 12px;
-  -webkit-overflow-scrolling: touch;
 }
 
 .cat-chip {

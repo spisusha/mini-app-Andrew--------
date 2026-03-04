@@ -40,7 +40,20 @@ export default function HomeScreen() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Apple Store</h1>
+      <div className="home-ticker">
+        <div className="home-ticker__track">
+          <span>
+            📦 Возможно, ваш гаджет уже на складе, но мы ещё не успели добавить его на витрину.
+            Напишите менеджеру — он проверит наличие и забронирует устройство для вас!
+          </span>
+          <span>
+            📦 Возможно, ваш гаджет уже на складе, но мы ещё не успели добавить его на витрину.
+            Напишите менеджеру — он проверит наличие и забронирует устройство для вас!
+          </span>
+        </div>
+      </div>
+
+      <h1 className="page-title">Si Phone</h1>
       <CategoryFilter value={category} onChange={setCategory} />
       <SortBar value={sort} onChange={(v: SortOption) => setSort(v)} />
       <div className="product-grid">
