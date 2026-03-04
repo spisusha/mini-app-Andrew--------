@@ -15,9 +15,13 @@ export default function ProfileScreen() {
 
       <div className="profile-card">
         <div className="profile-avatar">
-          <span className="profile-avatar__letter">
-            {firstName[0].toUpperCase()}
-          </span>
+          {tgUser?.photo_url ? (
+            <img className="profile-avatar__img" src={tgUser.photo_url} alt="" />
+          ) : (
+            <span className="profile-avatar__letter">
+              {firstName[0].toUpperCase()}
+            </span>
+          )}
         </div>
         <div className="profile-info">
           <h2 className="profile-name">
