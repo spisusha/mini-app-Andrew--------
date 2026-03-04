@@ -8,8 +8,6 @@ import './CatalogScreen.css';
 
 function isConfigurator(category: Category, _title: string): boolean {
   if (category === 'AirPods' && /max/i.test(_title)) return true;
-  if (category === 'iPad') return true;
-  if (category === 'iPhone') return true;
   return false;
 }
 

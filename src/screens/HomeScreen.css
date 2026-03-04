@@ -12,7 +12,7 @@
 .home-ticker__track {
   display: flex;
   width: max-content;
-  animation: ticker 18s linear infinite;
+  animation: ticker 10s linear infinite;
 }
 
 .home-ticker__track span {

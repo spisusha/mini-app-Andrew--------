@@ -44,6 +44,17 @@ export default function SkuVariantScreen() {
     if (opts.colorLabel) parts.push(String(opts.colorLabel));
     if (opts.simType) parts.push(String(opts.simType));
     subtitleParts = parts;
+  } else if (family.category === 'iPad') {
+    title = family.title;
+    const opts = variant.options || {};
+    const parts: string[] = [];
+    if (opts.colorLabel) parts.push(String(opts.colorLabel));
+    if (opts.storage) {
+      const gb = Number(opts.storage);
+      parts.push(gb >= 1024 ? `${gb / 1024} ТБ` : `${gb} ГБ`);
+    }
+    if (opts.connectivity) parts.push(String(opts.connectivity));
+    subtitleParts = parts;
   } else if (family.category === 'MacBook') {
     title = family.title;
     const opts = variant.options || {};
