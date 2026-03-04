@@ -55,6 +55,7 @@ export interface OrderPayload {
   totals: number;
   deliveryMethod: DeliveryMethod;
   address?: string;
+  phone?: string;
   paymentMethod: PaymentMethod;
   tgUser?: TgUser | null;
   guestId?: string;

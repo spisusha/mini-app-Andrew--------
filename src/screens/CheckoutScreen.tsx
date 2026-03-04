@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCartStore } from '../store/cartStore';
-import { saveOrder, notifyTelegram } from '../api/orderRepo';
+import { createOrder } from '../api/orderRepo';
 import { getTgUser, getGuestId } from '../telegram/telegramWebApp';
 import type { DeliveryMethod, PaymentMethod, OrderPayload } from '../domain/types';
 import './CheckoutScreen.css';
@@ -13,11 +13,20 @@ export default function CheckoutScreen() {
   const [delivery, setDelivery] = useState<DeliveryMethod>('pickup');
   const [payment, setPayment] = useState<PaymentMethod>('cash');
   const [address, setAddress] = useState('');
+  const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   if (items.length === 0) {
-    navigate('/cart');
+    const saved = sessionStorage.getItem('lastOrder');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        navigate('/result', { state: parsed, replace: true });
+        return null;
+      } catch { /* ignore */ }
+    }
+    navigate('/cart', { replace: true });
     return null;
   }
 
@@ -35,19 +44,21 @@ export default function CheckoutScreen() {
       totals: total(),
       deliveryMethod: delivery,
       address: delivery === 'delivery' ? address.trim() : undefined,
+      phone: phone.trim() || undefined,
       paymentMethod: payment,
       tgUser: tgUser || null,
       guestId: tgUser ? undefined : getGuestId(),
       createdAt: new Date().toISOString(),
     };
 
-    const orderId = await saveOrder(payload);
+    const orderId = await createOrder(payload);
     setSubmitting(false);
 
     if (orderId) {
-      notifyTelegram(orderId, payload).catch(() => {});
+      const resultState = { payload, orderId };
+      sessionStorage.setItem('lastOrder', JSON.stringify(resultState));
       clear();
-      navigate('/result', { state: { payload, orderId } });
+      navigate('/result', { state: resultState, replace: true });
     } else {
       setError('Ошибка при оформлении. Попробуйте ещё раз.');
     }
@@ -56,6 +67,38 @@ export default function CheckoutScreen() {
   return (
     <div className="page">
       <h1 className="page-title">Оформление заказа</h1>
+
+      <section className="checkout-section checkout-items">
+        <h3>Ваш заказ</h3>
+        {items.map((item) => (
+          <div key={item.variantId} className="checkout-item">
+            {item.image && <img className="checkout-item__img" src={item.image} alt="" />}
+            <div className="checkout-item__info">
+              <span className="checkout-item__name">{item.titleSnapshot}</span>
+              <span className="checkout-item__opts">
+                {Object.values(item.optionsSnapshot).filter(Boolean).join(' · ')}
+              </span>
+              <span className="checkout-item__price">
+                {item.qty > 1 ? `${item.qty} × ` : ''}
+                {item.priceSnapshot.toLocaleString('ru-RU')} ₽
+              </span>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section className="checkout-section">
+        <h3>Контактный телефон <span className="checkout-optional">необязательно</span></h3>
+        <div className="checkout-phone">
+          <input
+            type="tel"
+            placeholder="+7 (___) ___-__-__"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            autoComplete="tel"
+          />
+        </div>
+      </section>
 
       <section className="checkout-section">
         <h3>Способ получения</h3>
@@ -122,7 +165,7 @@ export default function CheckoutScreen() {
             />
             <div>
               <strong>Онлайн</strong>
-              <span>Карта или перевод</span>
+              <span>Перевод</span>
             </div>
           </label>
         </div>

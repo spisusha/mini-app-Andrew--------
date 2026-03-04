@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { OrderPayload } from '../domain/types';
 import './OrderResultScreen.css';
@@ -7,16 +8,31 @@ interface LocationState {
   orderId: string;
 }
 
+function loadState(locationState: unknown): LocationState | null {
+  if (locationState && typeof locationState === 'object' && 'orderId' in locationState) {
+    return locationState as LocationState;
+  }
+  try {
+    const raw = sessionStorage.getItem('lastOrder');
+    if (raw) return JSON.parse(raw) as LocationState;
+  } catch { /* ignore */ }
+  return null;
+}
+
 export default function OrderResultScreen() {
   const location = useLocation();
   const navigate = useNavigate();
-  const state = location.state as LocationState | null;
+  const state = useMemo(() => loadState(location.state), [location.state]);
 
   if (!state) {
     return (
       <div className="page result-page">
-        <h1>Нет данных о заказе</h1>
-        <button className="btn btn-primary" onClick={() => navigate('/')}>
+        <div className="result-icon">📦</div>
+        <h1 className="result-title">Заказ отправлен</h1>
+        <p className="result-subtitle">
+          Ваш заказ в обработке. Менеджер свяжется с вами в ближайшее время.
+        </p>
+        <button className="btn btn-primary btn-block" onClick={() => navigate('/')}>
           На главную
         </button>
       </div>
@@ -28,9 +44,10 @@ export default function OrderResultScreen() {
   return (
     <div className="page result-page">
       <div className="result-icon">✅</div>
-      <h1 className="result-title">Заказ в обработке</h1>
+      <h1 className="result-title">Заказ оформлен!</h1>
       <p className="result-subtitle">
-        Менеджер свяжется с вами в ближайшее время для подтверждения заказа.
+        Спасибо за заказ! Менеджер свяжется с вами в ближайшее время
+        для подтверждения и уточнения деталей.
       </p>
 
       <div className="result-card">
@@ -60,10 +77,16 @@ export default function OrderResultScreen() {
             <span className="result-val">{payload.address}</span>
           </div>
         )}
+        {payload.phone && (
+          <div className="result-row">
+            <span>Телефон</span>
+            <span className="result-val">{payload.phone}</span>
+          </div>
+        )}
         <div className="result-row">
           <span>Оплата</span>
           <span className="result-val">
-            {payload.paymentMethod === 'cash' ? 'Наличными' : 'Онлайн'}
+            {payload.paymentMethod === 'cash' ? 'Наличными' : 'Перевод'}
           </span>
         </div>
       </div>
@@ -83,7 +106,10 @@ export default function OrderResultScreen() {
         ))}
       </div>
 
-      <button className="btn btn-primary btn-block" onClick={() => navigate('/')}>
+      <button className="btn btn-primary btn-block" onClick={() => {
+        sessionStorage.removeItem('lastOrder');
+        navigate('/');
+      }}>
         На главную
       </button>
     </div>

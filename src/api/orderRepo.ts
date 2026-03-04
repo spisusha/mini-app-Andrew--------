@@ -1,37 +1,39 @@
 import { supabase } from './supabaseClient';
 import type { OrderPayload } from '../domain/types';
 
-export async function saveOrder(payload: OrderPayload): Promise<string | null> {
+interface CreateOrderResult {
+  ok: boolean;
+  orderId: string;
+  tgSent: number;
+  tgFailed: number;
+  error?: string;
+}
+
+export async function createOrder(payload: OrderPayload): Promise<string | null> {
   if (!supabase) {
-    console.log('[mock] Order saved:', payload);
+    console.log('[mock] Order created:', payload);
     return crypto.randomUUID();
   }
 
-  const { data, error } = await supabase
-    .from('orders')
-    .insert({ payload, created_at: payload.createdAt })
-    .select('id')
-    .single();
-
-  if (error) {
-    console.error('saveOrder error', error);
-    return null;
-  }
-  return data.id;
-}
-
-export async function notifyTelegram(orderId: string, payload: OrderPayload): Promise<void> {
-  if (!supabase) {
-    console.log('[mock] Telegram notify:', orderId);
-    return;
-  }
-
   try {
-    const { error } = await supabase.functions.invoke('send-order-telegram', {
-      body: { orderId, payload },
+    const { data, error } = await supabase.functions.invoke<CreateOrderResult>('create-order', {
+      body: payload,
     });
-    if (error) console.error('notifyTelegram error:', error);
+
+    if (error) {
+      console.error('createOrder invoke error:', error);
+      return null;
+    }
+
+    if (!data?.ok) {
+      console.error('createOrder server error:', data?.error);
+      return null;
+    }
+
+    console.log(`Order created: ${data.orderId}, TG sent: ${data.tgSent}, failed: ${data.tgFailed}`);
+    return data.orderId;
   } catch (err) {
-    console.error('notifyTelegram failed:', err);
+    console.error('createOrder failed:', err);
+    return null;
   }
 }
