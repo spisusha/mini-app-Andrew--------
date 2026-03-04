@@ -1,934 +1,713 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 
-interface PriceItem {
-  xmlid: string;
-  price: number;
-  description: string;
-  categoryGuess: string;
-}
+interface PriceItem { xmlid: string; price: number; description: string; categoryGuess: string }
+interface RequestBody { items: PriceItem[]; mode: 'prices_only' | 'sync_stock'; requestId?: string }
+interface NotFoundEntry { xmlid: string; description: string; price: number; reason: string; parsed?: Record<string, string>; candidates?: number }
+interface VerifyEntry { xmlid: string; found: boolean; in_stock: boolean | null; price: number | null; familyTitle: string | null }
 
-interface RequestBody {
-  items: PriceItem[];
-  mode: 'prices_only' | 'sync_stock';
-}
+const MAX_CREATE_IPHONE = 50;
 
 // ══════════════════════════════════════════════════════════════════════
-// ── IPHONE PARSER (unchanged) ────────────────────────────────────────
+// ── COLOR ───────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
-
-interface ParsedIphone {
-  familyTitle: string;
-  storage: string;
-  colorLabel: string;
-  /** Which DB option field to match on: 'simType' (17) or 'market' (16) */
-  optionKey: 'simType' | 'market';
-  optionValue: string;
-  generation: '16' | '17';
-}
-
-// ── Color alias mapping ─────────────────────────────────────────────
-const COLOR_ALIASES: Record<string, Record<string, string>> = {
-  'pro/promax': {
-    orange: 'Cosmic Orange',
-    blue: 'Deep Blue',
-    silver: 'Silver',
-    black: 'Black Titanium',
-    white: 'White Titanium',
-    natural: 'Natural Titanium',
-    desert: 'Desert Titanium',
-    green: 'Green',
-  },
-  default: {},
+const COLOR_CANONICAL: Record<string, string> = {
+  'deep blue': 'blue', 'cosmic orange': 'orange',
+  'black titanium': 'black', 'white titanium': 'white',
+  'natural titanium': 'natural', 'desert titanium': 'desert',
+  'space gray': 'gray', 'space grey': 'gray', 'sky blue': 'skyblue',
 };
+function normalizeColorForMatch(label: string): string {
+  const l = label.toLowerCase().trim();
+  if (COLOR_CANONICAL[l]) return COLOR_CANONICAL[l];
+  const stripped = l.replace(/\s*titanium$/i, '').replace(/\s*alumini?um$/i, '').trim();
+  return COLOR_CANONICAL[stripped] || stripped;
+}
 
+const COLOR_RESOLVE_PRO: Record<string, string> = {
+  orange: 'Cosmic Orange', blue: 'Deep Blue', silver: 'Silver',
+  black: 'Black Titanium', white: 'White Titanium',
+  natural: 'Natural Titanium', desert: 'Desert Titanium', green: 'Green',
+};
+const COLOR_RESOLVE_DEFAULT: Record<string, string> = {
+  black: 'Black', white: 'White', blue: 'Blue', green: 'Green',
+  pink: 'Pink', yellow: 'Yellow', orange: 'Orange', red: 'Red',
+  purple: 'Purple', starlight: 'Starlight', midnight: 'Midnight',
+  ultramarine: 'Ultramarine', teal: 'Teal', gold: 'Gold',
+};
 function resolveColorLabel(colorRaw: string, modelLine: string): string {
   const key = colorRaw.toLowerCase().trim();
-  const aliases =
-    /pro/i.test(modelLine) ? COLOR_ALIASES['pro/promax'] : COLOR_ALIASES['default'];
-  return aliases[key] || colorRaw;
+  if (/pro/i.test(modelLine)) return COLOR_RESOLVE_PRO[key] || COLOR_RESOLVE_DEFAULT[key] || colorRaw;
+  return COLOR_RESOLVE_DEFAULT[key] || colorRaw;
 }
 
-// ── Storage normalisation ───────────────────────────────────────────
+const COLOR_HEX: Record<string, string> = {
+  'Deep Blue': '#1B3A5C', 'Cosmic Orange': '#E8642C', 'Silver': '#C0C0C0',
+  'Black Titanium': '#3C3C3C', 'White Titanium': '#F5F5F0',
+  'Natural Titanium': '#9A8B7A', 'Desert Titanium': '#BFB09A',
+  'Green': '#394F3E', 'Black': '#111111', 'White': '#F5F5F5',
+  'Blue': '#3478F6', 'Pink': '#F2A9B7', 'Yellow': '#F9E87C',
+  'Orange': '#F5A623', 'Red': '#BF0013', 'Purple': '#8B72BE',
+  'Starlight': '#F0E8D8', 'Midnight': '#1E1E2E',
+  'Ultramarine': '#3F51B5', 'Teal': '#008080', 'Gold': '#D4AF37',
+};
+function colorToSnake(label: string): string {
+  return label.toLowerCase().replace(/\s+/g, '_');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ── IPHONE PARSER ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+interface ParsedIphone {
+  familyTitle: string; familyAliases: string[];
+  storage: string; colorLabel: string; colorSnake: string; colorHex: string;
+  optionKey: 'simType' | 'market'; optionValue: string;
+}
+
 function normalizeStorage(raw: string): string {
   const s = raw.trim().toLowerCase();
-  const tbMatch = s.match(/^(\d+)\s*tb$/);
-  if (tbMatch) return String(parseInt(tbMatch[1]) * 1024);
+  const tb = s.match(/^(\d+)\s*tb$/);
+  if (tb) return String(parseInt(tb[1]) * 1024);
   return s.replace(/\s*gb$/i, '');
 }
-
-// ── SIM normalisation (iPhone 17) ───────────────────────────────────
 function normalizeSim(raw: string): string {
   const s = raw.replace(/\s+/g, '').toLowerCase();
+  if (/2\s*sim|dual/i.test(s)) return 'Dual SIM';
   if (/esim\+sim|esim\+nano|sim\+esim|nano\+esim/.test(s)) return 'eSIM+SIM';
   if (/esim/.test(s)) return 'eSIM';
   return raw.trim();
 }
 
-// ── iPhone 17 parser ────────────────────────────────────────────────
-const IPHONE17_RE =
-  /^iPhone\s+(17[\s-]+Air|Air|17e|17\s+Pro\s+Max|17\s+Pro|17)\s+(\d+(?:\s*Tb)?)\s+\(([^)]+)\)\s+(.+)$/i;
+const OLD_IPHONE_RE = /^iPhone\s+(1[2345]|SE)\b/i;
 
-function parseIphone17(desc: string): ParsedIphone | null {
-  const m = desc.trim().match(IPHONE17_RE);
+const IPHONE_RE = /^iPhone\s+(17\s*Air|Air|17e|17\s+Pro\s+Max|17\s+Pro|17|16\s+Pro\s+Max|16\s+Plus|16\s+Pro|16e|16)\s+(\d+(?:\s*[TtGg][Bb])?)\s*(?:\(([^)]+)\))?\s*(.+)$/i;
+
+function parseIphoneDescription(desc: string): ParsedIphone | null {
+  const m = desc.trim().match(IPHONE_RE);
   if (!m) return null;
-
   const modelPart = m[1].trim();
-  const storageRaw = m[2];
-  const simRaw = m[3];
-  const colorRaw = m[4].trim();
+  let colorRaw = m[4].trim();
+  // Strip trailing region/market markers
+  colorRaw = colorRaw
+    .replace(/\s+LL\/A$/i, '')
+    .replace(/\s+(EU|JP|US|CN|HK|KR|IN|TH|VN|MY|SG|ZA|ZP|KH|LL)$/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim();
+  let extraMarket = '';
+  if (/\(2-?sim\)/i.test(colorRaw)) { extraMarket = 'Dual SIM'; colorRaw = colorRaw.replace(/\(2-?sim\)/i, '').trim(); }
+  const mp = modelPart.toLowerCase().replace(/[\s-]+/g, ' ').trim();
 
-  const mp = modelPart.toLowerCase().replace(/[\s-]+/g, ' ');
-  let familyTitle: string;
+  let familyTitle: string; let familyAliases: string[] = [];
+  const isGen17 = /^17|^air$/i.test(mp);
+
   if (mp === '17 pro max') familyTitle = 'Apple iPhone 17 Pro Max';
   else if (mp === '17 pro') familyTitle = 'Apple iPhone 17 Pro';
   else if (mp === '17') familyTitle = 'Apple iPhone 17';
-  else if (mp === '17 air' || mp === 'air') familyTitle = 'Apple iPhone Air';
+  else if (mp === '17 air' || mp === '17air' || mp === 'air') { familyTitle = 'Apple iPhone Air'; familyAliases = ['Apple iPhone 17 Air']; }
   else if (mp === '17e') familyTitle = 'Apple iPhone 17e';
-  else return null;
-
-  return {
-    familyTitle,
-    storage: normalizeStorage(storageRaw),
-    colorLabel: resolveColorLabel(colorRaw, modelPart),
-    optionKey: 'simType',
-    optionValue: normalizeSim(simRaw),
-    generation: '17',
-  };
-}
-
-// ── iPhone 16 parser ────────────────────────────────────────────────
-const IPHONE16_RE =
-  /^iPhone\s+(16\s+Pro\s+Max|16\s+Plus|16\s+Pro|16e|16)\s+(\d+)\s*(?:Gb|GB)?\s+(.+)$/i;
-
-function parseIphone16(desc: string): ParsedIphone | null {
-  const m = desc.trim().match(IPHONE16_RE);
-  if (!m) return null;
-
-  const modelPart = m[1].trim();
-  const storageRaw = m[2];
-  let rest = m[3].trim();
-
-  let market = 'EU';
-  if (/\(2-sim\)/i.test(rest)) {
-    market = 'Dual SIM';
-    rest = rest.replace(/\(2-sim\)/i, '').trim();
-  }
-  // Remove trailing region markers
-  rest = rest.replace(/\s+(EU|JP|US)$/i, '').trim();
-
-  const colorRaw = rest;
-
-  const mp = modelPart.toLowerCase().replace(/\s+/g, ' ');
-  let familyTitle: string;
-  if (mp === '16 pro max') familyTitle = 'Apple iPhone 16 Pro Max';
+  else if (mp === '16 pro max') familyTitle = 'Apple iPhone 16 Pro Max';
   else if (mp === '16 plus') familyTitle = 'Apple iPhone 16 Plus';
   else if (mp === '16 pro') familyTitle = 'Apple iPhone 16 Pro';
   else if (mp === '16e') familyTitle = 'Apple iPhone 16e';
   else if (mp === '16') familyTitle = 'Apple iPhone 16';
   else return null;
 
+  let optionKey: 'simType' | 'market'; let optionValue: string;
+  if (isGen17) { optionKey = 'simType'; optionValue = m[3] ? normalizeSim(m[3]) : 'eSIM+SIM'; }
+  else { optionKey = 'market'; optionValue = extraMarket || (m[3] && normalizeSim(m[3]) === 'Dual SIM' ? 'Dual SIM' : 'EU'); }
+
+  const colorLabel = resolveColorLabel(colorRaw, modelPart);
+
   return {
-    familyTitle,
-    storage: normalizeStorage(storageRaw),
-    colorLabel: resolveColorLabel(colorRaw, modelPart),
-    optionKey: 'market',
-    optionValue: market,
-    generation: '16',
+    familyTitle, familyAliases,
+    storage: normalizeStorage(m[2]),
+    colorLabel,
+    colorSnake: colorToSnake(colorLabel),
+    colorHex: COLOR_HEX[colorLabel] || '#888888',
+    optionKey, optionValue,
   };
 }
 
-// ── Combined iPhone parser ──────────────────────────────────────────
-function parseIphoneDescription(desc: string): ParsedIphone | null {
-  return parseIphone17(desc) || parseIphone16(desc);
-}
-
 // ══════════════════════════════════════════════════════════════════════
-// ── APPLE WATCH — LINE DETECTION + AUTO-CREATE ───────────────────────
+// ── WATCH / AIRPODS PARSERS ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
+interface ParsedWatch { line: string; familyTitle: string }
+const WLT: Record<string,string> = { S10:'Apple Watch Series 10', S11:'Apple Watch Series 11', SE2:'Apple Watch SE (2nd gen)', SE3:'Apple Watch SE (3rd gen)', Ultra2:'Apple Watch Ultra 2', Ultra3:'Apple Watch Ultra 3' };
+const WLP: [RegExp,string][] = [[/\bUltra\s*3\b/i,'Ultra3'],[/\bUltra\s*2\b/i,'Ultra2'],[/\bSE\s*3\b/i,'SE3'],[/\bSE\s*2\b/i,'SE2'],[/\bS11\b/i,'S11'],[/\bS10\b/i,'S10']];
+const WACC = /charger|заряд|usb|cable|кабел|adapter|адаптер/i;
+function parseWatch(desc: string): ParsedWatch | null { for (const [re,line] of WLP) { if (re.test(desc)) { const ft = WLT[line]; if (ft) return { line, familyTitle: ft }; } } return null; }
 
-interface ParsedWatchLine {
-  line: string;
-  familyTitle: string;
-}
-
-const WATCH_LINE_TITLE: Record<string, string> = {
-  S10: 'Apple Watch Series 10',
-  S11: 'Apple Watch Series 11',
-  SE2: 'Apple Watch SE (2nd gen)',
-  SE3: 'Apple Watch SE (3rd gen)',
-  Ultra2: 'Apple Watch Ultra 2',
-  Ultra3: 'Apple Watch Ultra 3',
-};
-
-const WATCH_LINE_PATTERNS: [RegExp, string][] = [
-  [/\bUltra\s*3\b/i, 'Ultra3'],
-  [/\bUltra\s*2\b/i, 'Ultra2'],
-  [/\bSE\s*3\b/i, 'SE3'],
-  [/\bSE\s*2\b/i, 'SE2'],
-  [/\bS11\b/i, 'S11'],
-  [/\bS10\b/i, 'S10'],
-];
-
-const WATCH_ACCESSORY_RE =
-  /charger|заряд|usb|cable|кабел|adapter|адаптер/i;
-
-function parseWatchLine(desc: string): ParsedWatchLine | null {
-  for (const [re, line] of WATCH_LINE_PATTERNS) {
-    if (re.test(desc)) {
-      const familyTitle = WATCH_LINE_TITLE[line];
-      if (familyTitle) return { line, familyTitle };
-    }
-  }
-  return null;
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// ── AIRPODS PARSER ──────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════
-
-interface ParsedAirPods {
-  familyTitle: string;
-  isMax: boolean;
-  colorLabel?: string;
-}
-
-const AIRPODS_ACCESSORY_RE = /charger|заряд|usb|cable|кабел|adapter|адаптер|чехол|case/i;
-
-const AIRPODS_MAX_COLORS: Record<string, string> = {
-  midnight: 'Midnight',
-  starlight: 'Starlight',
-  orange: 'Orange',
-  purple: 'Purple',
-  blue: 'Blue',
-  'space gray': 'Space Gray',
-  silver: 'Silver',
-  green: 'Green',
-  pink: 'Pink',
-  'sky blue': 'Sky Blue',
-};
-
+interface ParsedAirPods { familyTitle: string; isMax: boolean; colorLabel?: string }
+const APACC = /charger|заряд|usb|cable|кабел|adapter|адаптер|чехол|case/i;
+const APMC: Record<string,string> = { midnight:'Midnight',starlight:'Starlight',orange:'Orange',purple:'Purple',blue:'Blue','space gray':'Space Gray','space grey':'Space Gray',silver:'Silver',green:'Green',pink:'Pink','sky blue':'Sky Blue',red:'Red' };
+const APMC_HEX: Record<string,string> = { Midnight:'#1E1E2E',Starlight:'#F0E8D8',Orange:'#F5A623',Purple:'#8B72BE',Blue:'#3478F6','Space Gray':'#8D8D92',Silver:'#C0C0C0',Green:'#394F3E',Pink:'#F2A9B7','Sky Blue':'#87CEEB',Red:'#BF0013' };
 function parseAirPods(desc: string): ParsedAirPods | null {
   const d = desc.toLowerCase();
-
-  if (/airpods\s*max/i.test(desc)) {
-    let colorLabel: string | undefined;
-    for (const [key, label] of Object.entries(AIRPODS_MAX_COLORS)) {
-      if (d.includes(key)) { colorLabel = label; break; }
-    }
-    return { familyTitle: 'Apple AirPods Max', isMax: true, colorLabel };
-  }
-
-  if (/airpods\s*pro\s*3/i.test(desc))
-    return { familyTitle: 'Apple AirPods Pro 3', isMax: false };
-
-  if (/airpods\s*pro\s*(?:2|\(2)/i.test(desc))
-    return { familyTitle: 'Apple AirPods Pro 2', isMax: false };
-
-  if (/airpods\s*4/i.test(desc)) {
-    if (/anc|noise\s*cancell|шумоподав/i.test(desc))
-      return { familyTitle: 'Apple AirPods 4 (ANC)', isMax: false };
-    return { familyTitle: 'Apple AirPods 4', isMax: false };
-  }
-
+  if (/airpods\s*max/i.test(desc)) { let cl: string|undefined; for (const [k,v] of Object.entries(APMC)) if (d.includes(k)){cl=v;break;} return { familyTitle:'Apple AirPods Max', isMax:true, colorLabel:cl }; }
+  if (/airpods\s*pro\s*3/i.test(desc)) return { familyTitle:'Apple AirPods Pro 3', isMax:false };
+  if (/airpods\s*pro\s*(?:2|\(2)/i.test(desc)) return { familyTitle:'Apple AirPods Pro 2', isMax:false };
+  if (/airpods\s*4/i.test(desc)) { if (/anc|noise\s*cancell|шумоподав/i.test(desc)) return { familyTitle:'Apple AirPods 4 (ANC)', isMax:false }; return { familyTitle:'Apple AirPods 4', isMax:false }; }
   return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// ── HANDLER ──────────────────────────────────────────────────────────
+// ── HELPERS ─────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
+function normalizeXmlid(raw: string): string { return raw.replace(/^0+/, '') || '0'; }
+function ms(start: number) { return Date.now() - start; }
 
-const OTHER_XMLID_CATEGORIES = ['ipad', 'macbook'];
-
-function normalizeXmlid(raw: string): string {
-  return raw.replace(/^0+/, '') || '0';
-}
-
+// ══════════════════════════════════════════════════════════════════════
+// ── HANDLER ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const T0 = Date.now();
 
   try {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    );
-
-    const { items, mode } = (await req.json()) as RequestBody;
+    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    const body = (await req.json()) as RequestBody;
+    const { items, mode } = body;
+    const requestId = body.requestId || crypto.randomUUID();
+    const L = (phase: string, msg: string) => console.log(`[${requestId.slice(0,8)}] ${phase}: ${msg}`);
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'No items provided' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
+      return new Response(JSON.stringify({ ok: false, error: 'No items provided', requestId }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const now = new Date().toISOString();
-
-    // ── iPhone accumulators ─────────────────────────────────────────
-    let updatedCount = 0;
-    const matched: { xmlid: string; description: string; price: number; familyTitle?: string }[] = [];
-    const notFound: { xmlid: string; description: string; price: number }[] = [];
+    const isSyncStock = mode === 'sync_stock';
     const errors: string[] = [];
+    L('init', `mode=${mode} items=${items.length} isSyncStock=${isSyncStock}`);
 
-    // ── Watch accumulators ──────────────────────────────────────────
-    let watchUpdatedCount = 0;
-    let watchCreatedCount = 0;
-    let watchSkippedCount = 0;
-    const watchCreated: { xmlid: string; description: string; price: number; familyTitle?: string }[] = [];
-    const watchNotFound: { xmlid: string; description: string; price: number }[] = [];
+    let updatedPricesCount = 0, setInStockTrueCount = 0, createdCount = 0;
+    const iphoneReport = {
+      matchedByXmlidCount: 0, boundXmlidCount: 0, ambiguousCount: 0,
+      notFoundCount: 0, createdCount: 0, dedupedHits: 0,
+      skippedOldCount: 0, unknownColorCount: 0,
+      examples: [] as NotFoundEntry[],
+      createdExamples: [] as { xmlid: string; description: string; familyTitle: string; storage: string; color: string; sim: string }[],
+    };
+    const watchReport = { updatedCount: 0, createdCount: 0 };
+    const airpodsReport = { updatedCount: 0, createdCount: 0 };
+    const airpodsMaxReport = { matchedCount: 0, boundXmlidCount: 0, createdCount: 0, notFoundCount: 0, examples: [] as NotFoundEntry[] };
+    const otherReport = { updatedCount: 0, notFoundCount: 0 };
+    let skippedIpadCount = 0;
+    let skippedMacCount = 0;
+    const allNotFound: NotFoundEntry[] = [];
 
-    // ── AirPods accumulators ────────────────────────────────────────
-    let airpodsUpdatedCount = 0;
-    let airpodsCreatedCount = 0;
-    let airpodsMaxUpdatedCount = 0;
-    let airpodsMaxColorMatchedCount = 0;
-    let airpodsSkippedCount = 0;
-    const airpodsNotFound: { xmlid: string; description: string; price: number }[] = [];
-    const airpodsMaxNotFound: { xmlid: string; description: string; price: number }[] = [];
-
-    // ── Split items: iPhone / Watch / AirPods / Other ────────────────
+    // ── Split items ────────────────────────────────────────────────
     const iphoneItems: (PriceItem & { parsed: ParsedIphone })[] = [];
-    const watchItems: (PriceItem & { parsed: ParsedWatchLine })[] = [];
+    const watchItems: (PriceItem & { parsed: ParsedWatch })[] = [];
     const airpodsItems: (PriceItem & { parsed: ParsedAirPods })[] = [];
     const otherItems: PriceItem[] = [];
 
     for (const item of items) {
-      // 1) iPhone
       if (item.categoryGuess === 'iphone') {
-        const parsed = parseIphoneDescription(item.description);
-        if (parsed) {
-          iphoneItems.push({ ...item, parsed });
-        } else {
-          notFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-          errors.push(`Parse fail: "${item.description}"`);
+        // Skip old iPhones (12-15, SE) silently
+        if (OLD_IPHONE_RE.test(item.description.trim())) {
+          iphoneReport.skippedOldCount++;
+          continue;
         }
-      // 2) Watch
+        const p = parseIphoneDescription(item.description);
+        if (p) iphoneItems.push({ ...item, parsed: p });
+        else {
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' };
+          allNotFound.push(nf); iphoneReport.notFoundCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+        }
       } else if (/apple\s*watch/i.test(item.description)) {
-        if (WATCH_ACCESSORY_RE.test(item.description)) {
-          watchSkippedCount++;
-          continue;
-        }
-        const parsed = parseWatchLine(item.description);
-        if (parsed) {
-          watchItems.push({ ...item, parsed });
-        } else {
-          watchNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-        }
-      // 3) AirPods
+        if (WACC.test(item.description)) continue;
+        const p = parseWatch(item.description);
+        if (p) watchItems.push({ ...item, parsed: p });
+        else allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' });
       } else if (/air\s*pods/i.test(item.description)) {
-        if (AIRPODS_ACCESSORY_RE.test(item.description)) {
-          airpodsSkippedCount++;
-          continue;
-        }
-        const parsed = parseAirPods(item.description);
-        if (parsed) {
-          airpodsItems.push({ ...item, parsed });
-        } else {
-          airpodsNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-        }
-      // 4) Everything else
-      } else {
-        otherItems.push(item);
+        if (APACC.test(item.description)) continue;
+        const p = parseAirPods(item.description);
+        if (p) airpodsItems.push({ ...item, parsed: p });
+        else allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' });
+      } else if (item.categoryGuess === 'ipad' || /\bipad\b/i.test(item.description)) {
+        skippedIpadCount++;
+      } else if (item.categoryGuess === 'macbook' || item.categoryGuess === 'mac' || /\b(macbook|mac\s?book|imac|mac\s?mini|mac\s?pro|mac\s?studio)\b/i.test(item.description)) {
+        skippedMacCount++;
+      } else { otherItems.push(item); }
+    }
+    L('split', `iphone=${iphoneItems.length} watch=${watchItems.length} airpods=${airpodsItems.length} other=${otherItems.length} skippedOldIphone=${iphoneReport.skippedOldCount} skippedIpad=${skippedIpadCount} skippedMac=${skippedMacCount} parseFails=${allNotFound.length}`);
+
+    const verifyXmlids: string[] = [];
+    for (const arr of [iphoneItems as PriceItem[], watchItems, airpodsItems]) {
+      for (const it of arr) { if (verifyXmlids.length < 5) verifyXmlids.push(it.xmlid); }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ── PHASE 1: DISABLE ALL (sync_stock only) ─────────────────────
+    // ════════════════════════════════════════════════════════════════
+    let setInStockFalseCount = 0;
+    let disableAllAppleCount = 0;
+    let appleFamiliesFoundCount = 0;
+
+    if (isSyncStock) {
+      const t1 = Date.now();
+      const { data: fams, error: famErr } = await supabase
+        .from('product_families').select('id').in('category', ['iphone', 'watch', 'airpods']);
+
+      if (famErr) { L('disable_all', `ERROR: ${famErr.message}`); errors.push(`CRITICAL fetch families: ${famErr.message}`); }
+
+      const familyIds = (fams || []).map((f: { id: string }) => f.id);
+      appleFamiliesFoundCount = familyIds.length;
+      L('disable_all', `familyIds: ${familyIds.length} -> [${familyIds.join(', ')}]`);
+
+      if (familyIds.length > 0) {
+        const { count: beforeCount } = await supabase
+          .from('variants').select('id', { count: 'exact', head: true })
+          .in('family_id', familyIds).eq('in_stock', true);
+        setInStockFalseCount = beforeCount || 0;
+
+        const { data: updated, error: updErr, count } = await supabase
+          .from('variants').update({ in_stock: false })
+          .in('family_id', familyIds).select('id', { count: 'exact' });
+
+        if (updErr) { L('disable_all', `ERROR update: ${updErr.message}`); errors.push(`CRITICAL disable: ${updErr.message}`); }
+        disableAllAppleCount = count ?? (updated || []).length;
+        L('disable_all', `Done ${ms(t1)}ms. wasTrue=${setInStockFalseCount} disabled=${disableAllAppleCount}`);
+      }
+
+      if (disableAllAppleCount === 0) {
+        L('disable_all', 'CRITICAL: 0 rows disabled');
+        errors.push('CRITICAL: disable_all updated 0 rows');
       }
     }
 
     // ════════════════════════════════════════════════════════════════
-    // ── IPHONE LOGIC (both gen 16 and 17) — UNCHANGED ──────────────
+    // ── PHASE 2: IPHONE — match / bind / auto-create ────────────────
     // ════════════════════════════════════════════════════════════════
+    let iphoneCreateBudget = MAX_CREATE_IPHONE;
+
     if (iphoneItems.length > 0) {
-      const uniqueTitles = [...new Set(iphoneItems.map((i) => i.parsed.familyTitle))];
-      const { data: families, error: famErr } = await supabase
-        .from('product_families')
-        .select('id, title')
-        .in('title', uniqueTitles);
+      const t2 = Date.now();
+      const { data: iphoneFamilies } = await supabase
+        .from('product_families').select('id, title').in('category', ['iphone']);
+      const titleToId = new Map<string, string>();
+      for (const f of iphoneFamilies || []) titleToId.set(f.title, f.id);
+      L('iphone', `DB families: ${[...titleToId.keys()].join(', ')}`);
 
-      if (famErr) {
-        errors.push(`Fetch iPhone families error: ${famErr.message}`);
-      } else {
-        const titleToId = new Map<string, string>();
-        for (const f of families || []) titleToId.set(f.title, f.id);
-
-        // For sync_stock we also need ALL families in the affected generations
-        const has16 = iphoneItems.some((i) => i.parsed.generation === '16');
-        const has17 = iphoneItems.some((i) => i.parsed.generation === '17');
-
-        let syncFamilyIds: string[] = [];
-        if (mode === 'sync_stock') {
-          const orClauses: string[] = [];
-          if (has16) orClauses.push('title.like.Apple iPhone 16%');
-          if (has17) {
-            orClauses.push('title.like.Apple iPhone 17%');
-            orClauses.push('title.like.Apple iPhone Air%');
-          }
-          if (orClauses.length > 0) {
-            const { data: syncFamilies, error: syncErr } = await supabase
-              .from('product_families')
-              .select('id')
-              .or(orClauses.join(','));
-            if (syncErr) {
-              errors.push(`Fetch sync families error: ${syncErr.message}`);
-            } else {
-              syncFamilyIds = (syncFamilies || []).map((f: { id: string }) => f.id);
-            }
-          }
-        }
-
-        // Fetch all variants for matched + sync families
-        const allFamilyIds = [...new Set([
-          ...titleToId.values(),
-          ...syncFamilyIds,
-        ])];
-        const { data: allVariants, error: varErr } = allFamilyIds.length > 0
-          ? await supabase
-              .from('variants')
-              .select('id, family_id, options, supplier_xmlid')
-              .in('family_id', allFamilyIds)
-          : { data: [] as any[], error: null };
-
-        if (varErr) {
-          errors.push(`Fetch iPhone variants error: ${varErr.message}`);
-        } else {
-          // sync_stock: mark ALL variants of affected generations as out-of-stock
-          if (mode === 'sync_stock' && syncFamilyIds.length > 0) {
-            const syncFamilySet = new Set(syncFamilyIds);
-            const idsToDisable = (allVariants || [])
-              .filter((v: { family_id: string }) => syncFamilySet.has(v.family_id))
-              .map((v: { id: string }) => v.id);
-            if (idsToDisable.length > 0) {
-              const batchSize = 200;
-              for (let i = 0; i < idsToDisable.length; i += batchSize) {
-                const batch = idsToDisable.slice(i, i + batchSize);
-                const { error: offErr } = await supabase
-                  .from('variants')
-                  .update({ in_stock: false, updated_at: now })
-                  .in('id', batch);
-                if (offErr) errors.push(`iPhone stock-off error: ${offErr.message}`);
-              }
-            }
-          }
-
-          // Build lookup index — key adapts to the option field each variant uses
-          const variantIndex = new Map<string, { id: string; supplier_xmlid: string | null }>();
-          for (const v of allVariants || []) {
-            const opts = v.options as Record<string, string>;
-            const matchVal = opts.market ?? opts.simType ?? '';
-            const key = `${v.family_id}|${opts.storage || ''}|${matchVal}|${opts.colorLabel || ''}`;
-            variantIndex.set(key, { id: v.id, supplier_xmlid: v.supplier_xmlid });
-          }
-
-          // Match each iPhone item
-          for (const item of iphoneItems) {
-            const { parsed } = item;
-            const familyId = titleToId.get(parsed.familyTitle);
-            if (!familyId) {
-              notFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-              continue;
-            }
-
-            const lookupKey = `${familyId}|${parsed.storage}|${parsed.optionValue}|${parsed.colorLabel}`;
-            const found = variantIndex.get(lookupKey);
-
-            if (!found) {
-              notFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-              continue;
-            }
-
-            const updatePayload: Record<string, unknown> = {
-              price: item.price,
-              in_stock: true,
-              supplier_xmlid: item.xmlid,
-              updated_at: now,
-            };
-
-            const { error: updateErr } = await supabase
-              .from('variants')
-              .update(updatePayload)
-              .eq('id', found.id);
-
-            if (updateErr) {
-              errors.push(`Update iPhone xmlid=${item.xmlid}: ${updateErr.message}`);
-            } else {
-              updatedCount++;
-              matched.push({
-                xmlid: item.xmlid,
-                description: item.description,
-                price: item.price,
-                familyTitle: parsed.familyTitle,
-              });
-            }
-          }
-        }
+      function resolveFamilyId(p: ParsedIphone): string | null {
+        const d = titleToId.get(p.familyTitle);
+        if (d) return d;
+        for (const a of p.familyAliases) { const aid = titleToId.get(a); if (aid) return aid; }
+        return null;
       }
-    }
 
-    // ════════════════════════════════════════════════════════════════
-    // ── APPLE WATCH: UPDATE-BY-XMLID OR AUTO-CREATE ────────────────
-    // ════════════════════════════════════════════════════════════════
-    if (watchItems.length > 0) {
-      // 1) Resolve watch family titles → IDs
-      const watchTitles = [...new Set(watchItems.map((i) => i.parsed.familyTitle))];
-      const { data: watchFamilies, error: wfErr } = await supabase
-        .from('product_families')
-        .select('id, title')
-        .in('title', watchTitles);
-
-      if (wfErr) {
-        errors.push(`Fetch Watch families error: ${wfErr.message}`);
-      } else {
-        const wTitleToId = new Map<string, string>();
-        for (const f of watchFamilies || []) wTitleToId.set(f.title, f.id);
-
-        // 2) sync_stock: disable ALL watch variants before processing
-        if (mode === 'sync_stock') {
-          const { data: allWatchFams, error: awfErr } = await supabase
-            .from('product_families')
-            .select('id')
-            .eq('category', 'watch');
-          if (awfErr) {
-            errors.push(`Fetch all watch families error: ${awfErr.message}`);
-          } else {
-            const allWatchFamilyIds = (allWatchFams || []).map((f: { id: string }) => f.id);
-            if (allWatchFamilyIds.length > 0) {
-              const { data: watchVars } = await supabase
-                .from('variants')
-                .select('id')
-                .in('family_id', allWatchFamilyIds);
-              const idsToDisable = (watchVars || []).map((v: { id: string }) => v.id);
-              const batchSize = 200;
-              for (let i = 0; i < idsToDisable.length; i += batchSize) {
-                const batch = idsToDisable.slice(i, i + batchSize);
-                const { error: offErr } = await supabase
-                  .from('variants')
-                  .update({ in_stock: false, updated_at: now })
-                  .in('id', batch);
-                if (offErr) errors.push(`Watch stock-off error: ${offErr.message}`);
-              }
-            }
-          }
-        }
-
-        // 3) Batch-fetch existing variants by supplier_xmlid (normalized)
-        const existingMap = new Map<string, { id: string; options: Record<string, unknown> }>();
-        const batchSize = 200;
-        const allWatchXmlids = watchItems.map((i) => i.xmlid);
-        const allWatchXmlidsExpanded = [...new Set([
-          ...allWatchXmlids,
-          ...allWatchXmlids.map(normalizeXmlid),
-        ])];
-        for (let i = 0; i < allWatchXmlidsExpanded.length; i += batchSize) {
-          const batch = allWatchXmlidsExpanded.slice(i, i + batchSize);
-          const { data: rows } = await supabase
-            .from('variants')
-            .select('id, options, supplier_xmlid')
-            .in('supplier_xmlid', batch);
-          for (const v of rows || []) {
-            existingMap.set(normalizeXmlid(v.supplier_xmlid), {
-              id: v.id,
-              options: (v.options as Record<string, unknown>) || {},
-            });
-          }
-        }
-
-        // 4) Process each watch item: update or create
-        for (const item of watchItems) {
-          const existing = existingMap.get(normalizeXmlid(item.xmlid));
-
-          if (existing) {
-            const mergedOptions = {
-              ...existing.options,
-              raw: item.description,
-              supplierTitle: item.description,
-            };
-            const { error: upErr } = await supabase
-              .from('variants')
-              .update({
-                price: item.price,
-                in_stock: true,
-                supplier_xmlid: item.xmlid,
-                options: mergedOptions,
-                updated_at: now,
-              })
-              .eq('id', existing.id);
-
-            if (upErr) {
-              errors.push(`Watch update xmlid=${item.xmlid}: ${upErr.message}`);
-            } else {
-              watchUpdatedCount++;
-            }
-          } else {
-            // ── AUTO-CREATE new variant ─────────────────────────────
-            const familyId = wTitleToId.get(item.parsed.familyTitle);
-            if (!familyId) {
-              watchNotFound.push({
-                xmlid: item.xmlid,
-                description: item.description,
-                price: item.price,
-              });
-              continue;
-            }
-
-            const { error: insErr } = await supabase
-              .from('variants')
-              .insert({
-                family_id: familyId,
-                options: {
-                  line: item.parsed.line,
-                  raw: item.description,
-                  supplierTitle: item.description,
-                },
-                images: [],
-                price: item.price,
-                in_stock: true,
-                sku_code: `watch-${item.parsed.line.toLowerCase()}-${item.xmlid}`,
-                supplier_xmlid: item.xmlid,
-              });
-
-            if (insErr) {
-              errors.push(`Watch create xmlid=${item.xmlid}: ${insErr.message}`);
-            } else {
-              watchCreatedCount++;
-              watchCreated.push({
-                xmlid: item.xmlid,
-                description: item.description,
-                price: item.price,
-                familyTitle: item.parsed.familyTitle,
-              });
-            }
-          }
-        }
+      const allFids = [...new Set([...titleToId.values()])];
+      let allIphoneVariants: any[] = [];
+      for (let i = 0; i < allFids.length; i += 50) {
+        const batch = allFids.slice(i, i + 50);
+        const { data } = await supabase.from('variants').select('id, family_id, options, supplier_xmlid').in('family_id', batch);
+        if (data) allIphoneVariants.push(...data);
       }
-    }
+      L('iphone', `Loaded ${allIphoneVariants.length} existing variants`);
 
-    // ════════════════════════════════════════════════════════════════
-    // ── AIRPODS: UPDATE-BY-XMLID OR AUTO-CREATE / COLOR-MATCH ──────
-    // ════════════════════════════════════════════════════════════════
-    if (airpodsItems.length > 0) {
-      const airpodsTitles = [...new Set(airpodsItems.map((i) => i.parsed.familyTitle))];
-      const { data: apFamilies, error: apfErr } = await supabase
-        .from('product_families')
-        .select('id, title')
-        .in('title', airpodsTitles);
+      const xmlidToVar = new Map<string, any>();
+      for (const v of allIphoneVariants) { if (v.supplier_xmlid) xmlidToVar.set(normalizeXmlid(v.supplier_xmlid), v); }
 
-      if (apfErr) {
-        errors.push(`Fetch AirPods families error: ${apfErr.message}`);
-      } else {
-        const apTitleToId = new Map<string, string>();
-        for (const f of apFamilies || []) apTitleToId.set(f.title, f.id);
-
-        // sync_stock: disable ALL airpods variants
-        if (mode === 'sync_stock') {
-          const { data: allApFams } = await supabase
-            .from('product_families')
-            .select('id')
-            .eq('category', 'airpods');
-          const allApFamilyIds = (allApFams || []).map((f: { id: string }) => f.id);
-          if (allApFamilyIds.length > 0) {
-            const { data: apVars } = await supabase
-              .from('variants')
-              .select('id')
-              .in('family_id', allApFamilyIds);
-            const idsToDisable = (apVars || []).map((v: { id: string }) => v.id);
-            for (let i = 0; i < idsToDisable.length; i += 200) {
-              const batch = idsToDisable.slice(i, i + 200);
-              const { error: offErr } = await supabase
-                .from('variants')
-                .update({ in_stock: false, updated_at: now })
-                .in('id', batch);
-              if (offErr) errors.push(`AirPods stock-off error: ${offErr.message}`);
-            }
-          }
-        }
-
-        // Batch-fetch existing variants by supplier_xmlid (normalized)
-        const apExistingMap = new Map<string, { id: string; options: Record<string, unknown> }>();
-        const allApXmlids = airpodsItems.map((i) => i.xmlid);
-        const allApXmlidsExpanded = [...new Set([
-          ...allApXmlids,
-          ...allApXmlids.map(normalizeXmlid),
-        ])];
-        for (let i = 0; i < allApXmlidsExpanded.length; i += 200) {
-          const batch = allApXmlidsExpanded.slice(i, i + 200);
-          const { data: rows } = await supabase
-            .from('variants')
-            .select('id, options, supplier_xmlid')
-            .in('supplier_xmlid', batch);
-          for (const v of rows || []) {
-            apExistingMap.set(normalizeXmlid(v.supplier_xmlid), {
-              id: v.id,
-              options: (v.options as Record<string, unknown>) || {},
-            });
-          }
-        }
-
-        // Also fetch Max variants for color matching
-        const maxFamilyId = apTitleToId.get('Apple AirPods Max');
-        let maxVariants: { id: string; options: Record<string, string>; supplier_xmlid: string | null }[] = [];
-        if (maxFamilyId) {
-          const { data: mv } = await supabase
-            .from('variants')
-            .select('id, options, supplier_xmlid')
-            .eq('family_id', maxFamilyId);
-          maxVariants = (mv || []) as typeof maxVariants;
-        }
-
-        for (const item of airpodsItems) {
-          const existing = apExistingMap.get(normalizeXmlid(item.xmlid));
-
-          if (existing) {
-            const mergedOptions = {
-              ...existing.options,
-              raw: item.description,
-              supplierTitle: item.description,
-            };
-            const { error: upErr } = await supabase
-              .from('variants')
-              .update({ price: item.price, in_stock: true, supplier_xmlid: item.xmlid, options: mergedOptions, updated_at: now })
-              .eq('id', existing.id);
-
-            if (upErr) {
-              errors.push(`AirPods update xmlid=${item.xmlid}: ${upErr.message}`);
-            } else {
-              if (item.parsed.isMax) airpodsMaxUpdatedCount++;
-              else airpodsUpdatedCount++;
-            }
-          } else if (item.parsed.isMax) {
-            // AirPods Max: try color matching
-            if (item.parsed.colorLabel) {
-              const colorMatch = maxVariants.find(
-                (v) => v.options?.colorLabel === item.parsed.colorLabel && !v.supplier_xmlid,
-              ) || maxVariants.find(
-                (v) => v.options?.colorLabel === item.parsed.colorLabel,
-              );
-              if (colorMatch) {
-                const { error: upErr } = await supabase
-                  .from('variants')
-                  .update({
-                    price: item.price,
-                    in_stock: true,
-                    supplier_xmlid: item.xmlid,
-                    options: { ...colorMatch.options, raw: item.description, supplierTitle: item.description },
-                    updated_at: now,
-                  })
-                  .eq('id', colorMatch.id);
-                if (upErr) {
-                  errors.push(`AirPods Max color match xmlid=${item.xmlid}: ${upErr.message}`);
-                } else {
-                  airpodsMaxColorMatchedCount++;
-                }
-                continue;
-              }
-            }
-            airpodsMaxNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-          } else {
-            // AirPods non-Max: AUTO-CREATE
-            const familyId = apTitleToId.get(item.parsed.familyTitle);
-            if (!familyId) {
-              airpodsNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
-              continue;
-            }
-            const { error: insErr } = await supabase
-              .from('variants')
-              .insert({
-                family_id: familyId,
-                options: { raw: item.description, supplierTitle: item.description },
-                images: [],
-                price: item.price,
-                in_stock: true,
-                sku_code: `airpods-${item.xmlid}`,
-                supplier_xmlid: item.xmlid,
-              });
-            if (insErr) {
-              errors.push(`AirPods create xmlid=${item.xmlid}: ${insErr.message}`);
-            } else {
-              airpodsCreatedCount++;
-            }
-          }
-        }
+      const optIdx = new Map<string, any[]>();
+      for (const v of allIphoneVariants) {
+        const o = v.options as Record<string, string>;
+        const mv = o.market ?? o.simType ?? '';
+        const cn = normalizeColorForMatch(o.colorLabel || '');
+        const k = `${v.family_id}|${o.storage || ''}|${mv}|${cn}`;
+        if (!optIdx.has(k)) optIdx.set(k, []);
+        optIdx.get(k)!.push(v);
       }
-    }
 
-    // ════════════════════════════════════════════════════════════════
-    // ── OTHER CATEGORIES (existing supplier_xmlid logic) ───────────
-    // ════════════════════════════════════════════════════════════════
-    if (otherItems.length > 0) {
-      const batchSize = 50;
-      for (let i = 0; i < otherItems.length; i += batchSize) {
-        const batch = otherItems.slice(i, i + batchSize);
-        const xmlids = batch.map((b) => b.xmlid);
-        const xmlidsExpanded = [...new Set([...xmlids, ...xmlids.map(normalizeXmlid)])];
+      for (const item of iphoneItems) {
+        const nx = normalizeXmlid(item.xmlid);
+        const p = item.parsed;
 
-        const { data: existingVariants, error: fetchErr } = await supabase
-          .from('variants')
-          .select('id, supplier_xmlid')
-          .in('supplier_xmlid', xmlidsExpanded);
-
-        if (fetchErr) {
-          errors.push(`Fetch error batch ${i}: ${fetchErr.message}`);
+        // A) Match by supplier_xmlid
+        const byXmlid = xmlidToVar.get(nx);
+        if (byXmlid) {
+          const up: Record<string, unknown> = { price: item.price, updated_at: now };
+          if (isSyncStock) up.in_stock = true;
+          const { error: e } = await supabase.from('variants').update(up).eq('id', byXmlid.id);
+          if (!e) { updatedPricesCount++; iphoneReport.matchedByXmlidCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`iPhone update xmlid=${item.xmlid}: ${e.message}`);
           continue;
         }
 
-        const existingMap = new Map<string, string>();
-        for (const v of existingVariants || []) {
-          existingMap.set(normalizeXmlid(v.supplier_xmlid), v.id);
+        // Resolve family
+        const fid = resolveFamilyId(p);
+        if (!fid) {
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'no_family', parsed: { family: p.familyTitle, storage: p.storage, sim: p.optionValue, color: p.colorLabel } };
+          allNotFound.push(nf); iphoneReport.notFoundCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+          continue;
         }
 
-        for (const item of batch) {
-          const variantId = existingMap.get(normalizeXmlid(item.xmlid));
-          if (!variantId) {
-            notFound.push({ xmlid: item.xmlid, description: item.description, price: item.price });
+        // B) Match by options (bind xmlid)
+        const cn = normalizeColorForMatch(p.colorLabel);
+        const lk = `${fid}|${p.storage}|${p.optionValue}|${cn}`;
+        const cands = optIdx.get(lk) || [];
+
+        if (cands.length === 1) {
+          const tgt = cands[0];
+          const up: Record<string, unknown> = { price: item.price, supplier_xmlid: item.xmlid, updated_at: now };
+          if (isSyncStock) up.in_stock = true;
+          if (tgt.supplier_xmlid && normalizeXmlid(tgt.supplier_xmlid) !== nx) {
+            const opts = { ...(tgt.options as Record<string, unknown>) };
+            const prev = (opts._xmlid_audit as string[] | undefined) || [];
+            opts._xmlid_audit = [...prev, `${tgt.supplier_xmlid}→${item.xmlid}@${now}`];
+            up.options = opts;
+          }
+          const { error: e } = await supabase.from('variants').update(up).eq('id', tgt.id);
+          if (!e) { updatedPricesCount++; iphoneReport.boundXmlidCount++; if (isSyncStock) setInStockTrueCount++; xmlidToVar.set(nx, tgt); }
+          else errors.push(`iPhone bind xmlid=${item.xmlid}: ${e.message}`);
+          continue;
+        }
+
+        if (cands.length > 1) {
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'ambiguous', candidates: cands.length, parsed: { family: p.familyTitle, storage: p.storage, sim: p.optionValue, color: p.colorLabel } };
+          allNotFound.push(nf); iphoneReport.ambiguousCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+          continue;
+        }
+
+        // C) Dedup check: look for existing variant with same options in this family
+        //    (broader search — match by storage + sim/market + colorLabel, ignoring xmlid)
+        {
+          const allFamilyVars = allIphoneVariants.filter((v: any) => v.family_id === fid);
+          const existingDup = allFamilyVars.find((v: any) => {
+            const o = v.options as Record<string, string>;
+            if (o.storage !== p.storage) return false;
+            const vSim = o[p.optionKey] || o.market || o.simType || '';
+            if (vSim !== p.optionValue) return false;
+            const vColorNorm = normalizeColorForMatch(o.colorLabel || o.color || '');
+            return vColorNorm === cn;
+          });
+
+          if (existingDup) {
+            const up: Record<string, unknown> = { price: item.price, supplier_xmlid: item.xmlid, updated_at: now };
+            if (isSyncStock) up.in_stock = true;
+            const { error: e } = await supabase.from('variants').update(up).eq('id', existingDup.id);
+            if (!e) { updatedPricesCount++; iphoneReport.dedupedHits++; if (isSyncStock) setInStockTrueCount++; xmlidToVar.set(nx, existingDup); }
+            else errors.push(`iPhone dedup-bind xmlid=${item.xmlid}: ${e.message}`);
             continue;
           }
+        }
 
-          const updatePayload: Record<string, unknown> = {
-            price: item.price,
-            updated_at: now,
-          };
-          if (mode === 'sync_stock') {
-            updatePayload.in_stock = true;
-          }
+        // Auto-create (only if budget allows and all fields resolved)
+        if (iphoneCreateBudget <= 0) {
+          errors.push(`iPhone auto-create limit (${MAX_CREATE_IPHONE}) reached — skipping remaining`);
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'create_limit', parsed: { family: p.familyTitle, storage: p.storage, sim: p.optionValue, color: p.colorLabel } };
+          allNotFound.push(nf); iphoneReport.notFoundCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+          continue;
+        }
 
-          const { error: updateErr } = await supabase
-            .from('variants')
-            .update(updatePayload)
-            .eq('id', variantId);
+        const storageNum = parseInt(p.storage);
+        if (!storageNum || ![128, 256, 512, 1024, 2048].includes(storageNum)) {
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'bad_storage', parsed: { family: p.familyTitle, storage: p.storage, sim: p.optionValue, color: p.colorLabel } };
+          allNotFound.push(nf); iphoneReport.notFoundCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+          continue;
+        }
 
-          if (updateErr) {
-            errors.push(`Update error xmlid=${item.xmlid}: ${updateErr.message}`);
-          } else {
-            updatedCount++;
-            matched.push({ xmlid: item.xmlid, description: item.description, price: item.price });
+        if (!p.colorLabel || p.colorHex === '#888888') {
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'unknown_color', parsed: { family: p.familyTitle, storage: p.storage, sim: p.optionValue, color: p.colorLabel } };
+          allNotFound.push(nf); iphoneReport.notFoundCount++; iphoneReport.unknownColorCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+          continue;
+        }
+
+        const newOptions: Record<string, unknown> = {
+          storage: p.storage,
+          color: p.colorSnake,
+          colorLabel: p.colorLabel,
+          colorHex: p.colorHex,
+          [p.optionKey]: p.optionValue,
+        };
+
+        const skuParts = [
+          p.familyTitle.replace(/^Apple\s+/i, '').replace(/\s+/g, '-').toLowerCase(),
+          p.storage,
+          p.colorSnake,
+          p.optionValue.replace(/\s+/g, '').toLowerCase(),
+        ];
+
+        const { error: cErr } = await supabase.from('variants').insert({
+          family_id: fid,
+          options: newOptions,
+          images: [],
+          price: item.price,
+          in_stock: isSyncStock,
+          sku_code: skuParts.join('-'),
+          supplier_xmlid: item.xmlid,
+        });
+
+        if (cErr) {
+          errors.push(`iPhone create xmlid=${item.xmlid}: ${cErr.message}`);
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: 'create_error', parsed: { family: p.familyTitle, error: cErr.message } };
+          allNotFound.push(nf); iphoneReport.notFoundCount++;
+          if (iphoneReport.examples.length < 20) iphoneReport.examples.push(nf);
+        } else {
+          createdCount++;
+          iphoneReport.createdCount++;
+          iphoneCreateBudget--;
+          if (isSyncStock) setInStockTrueCount++;
+          if (iphoneReport.createdExamples.length < 5) {
+            iphoneReport.createdExamples.push({
+              xmlid: item.xmlid, description: item.description,
+              familyTitle: p.familyTitle, storage: p.storage,
+              color: p.colorLabel, sim: p.optionValue,
+            });
           }
         }
       }
 
-      // sync_stock for non-iPhone, non-Watch categories (ipad, airpods, macbook)
-      if (mode === 'sync_stock') {
-        const { data: otherFamilies, error: famErr } = await supabase
-          .from('product_families')
-          .select('id')
-          .in('category', OTHER_XMLID_CATEGORIES);
+      L('iphone', `Done ${ms(t2)}ms. byXmlid=${iphoneReport.matchedByXmlidCount} bound=${iphoneReport.boundXmlidCount} deduped=${iphoneReport.dedupedHits} created=${iphoneReport.createdCount} ambiguous=${iphoneReport.ambiguousCount} notFound=${iphoneReport.notFoundCount} unknownColor=${iphoneReport.unknownColorCount} skippedOld=${iphoneReport.skippedOldCount}`);
 
-        if (famErr) {
-          errors.push(`Fetch other families error: ${famErr.message}`);
-        } else if (otherFamilies && otherFamilies.length > 0) {
-          const familyIds = otherFamilies.map((f: { id: string }) => f.id);
+      if (iphoneCreateBudget <= 0) {
+        errors.push(`iPhone auto-create limit (${MAX_CREATE_IPHONE}) was exhausted`);
+      }
+    }
 
-          const { data: toDisable, error: disableErr } = await supabase
-            .from('variants')
-            .select('id, supplier_xmlid')
-            .in('family_id', familyIds)
-            .not('supplier_xmlid', 'is', null)
-            .eq('in_stock', true);
+    // ════════════════════════════════════════════════════════════════
+    // ── PHASE 3: WATCH ──────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════
+    if (watchItems.length > 0) {
+      const t3 = Date.now();
+      const wTitles = [...new Set(watchItems.map(i => i.parsed.familyTitle))];
+      const { data: wFams } = await supabase.from('product_families').select('id, title').in('title', wTitles);
+      const wMap = new Map<string, string>(); for (const f of wFams || []) wMap.set(f.title, f.id);
 
-          if (disableErr) {
-            errors.push(`Fetch variants to disable error: ${disableErr.message}`);
-          } else if (toDisable) {
-            const fileXmlids = new Set(otherItems.map((i) => i.xmlid));
-            const idsToDisable = toDisable
-              .filter((v: { supplier_xmlid: string }) => !fileXmlids.has(v.supplier_xmlid))
-              .map((v: { id: string }) => v.id);
+      const wxAll = watchItems.map(i => i.xmlid);
+      const wxExp = [...new Set([...wxAll, ...wxAll.map(normalizeXmlid)])];
+      const wExRows: any[] = [];
+      for (let i = 0; i < wxExp.length; i += 200) {
+        const b = wxExp.slice(i, i + 200);
+        const { data } = await supabase.from('variants').select('id, options, supplier_xmlid').in('supplier_xmlid', b);
+        if (data) wExRows.push(...data);
+      }
+      const wExMap = new Map<string, { id: string; options: Record<string, unknown> }>();
+      for (const v of wExRows) wExMap.set(normalizeXmlid(v.supplier_xmlid), { id: v.id, options: v.options || {} });
 
-            if (idsToDisable.length > 0) {
-              const { error: bulkErr } = await supabase
-                .from('variants')
-                .update({ in_stock: false, updated_at: now })
-                .in('id', idsToDisable);
+      for (const item of watchItems) {
+        const ex = wExMap.get(normalizeXmlid(item.xmlid));
+        if (ex) {
+          const up: Record<string, unknown> = { price: item.price, supplier_xmlid: item.xmlid, options: { ...ex.options, raw: item.description, supplierTitle: item.description }, updated_at: now };
+          if (isSyncStock) up.in_stock = true;
+          const { error: e } = await supabase.from('variants').update(up).eq('id', ex.id);
+          if (!e) { updatedPricesCount++; watchReport.updatedCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`Watch update: ${e.message}`);
+        } else {
+          const fid = wMap.get(item.parsed.familyTitle);
+          if (!fid) { allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'no_family' }); continue; }
+          const { error: e } = await supabase.from('variants').insert({
+            family_id: fid, options: { line: item.parsed.line, raw: item.description, supplierTitle: item.description },
+            images: [], price: item.price, in_stock: isSyncStock, sku_code: `watch-${item.parsed.line.toLowerCase()}-${item.xmlid}`, supplier_xmlid: item.xmlid,
+          });
+          if (!e) { createdCount++; watchReport.createdCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`Watch create: ${e.message}`);
+        }
+      }
+      L('watch', `Done ${ms(t3)}ms. updated=${watchReport.updatedCount} created=${watchReport.createdCount}`);
+    }
 
-              if (bulkErr) errors.push(`Bulk disable error: ${bulkErr.message}`);
+    // ════════════════════════════════════════════════════════════════
+    // ── PHASE 4: AIRPODS ────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════
+    if (airpodsItems.length > 0) {
+      const t4 = Date.now();
+      const apTitles = [...new Set(airpodsItems.map(i => i.parsed.familyTitle))];
+      const { data: apFams } = await supabase.from('product_families').select('id, title').in('title', apTitles);
+      const apMap = new Map<string, string>(); for (const f of apFams || []) apMap.set(f.title, f.id);
+
+      const axAll = airpodsItems.map(i => i.xmlid);
+      const axExp = [...new Set([...axAll, ...axAll.map(normalizeXmlid)])];
+      const aExRows: any[] = [];
+      for (let i = 0; i < axExp.length; i += 200) {
+        const b = axExp.slice(i, i + 200);
+        const { data } = await supabase.from('variants').select('id, options, supplier_xmlid').in('supplier_xmlid', b);
+        if (data) aExRows.push(...data);
+      }
+      const aExMap = new Map<string, { id: string; options: Record<string, unknown> }>();
+      for (const v of aExRows) aExMap.set(normalizeXmlid(v.supplier_xmlid), { id: v.id, options: v.options || {} });
+
+      // Find AirPods Max family: try exact title first, then search by category+pattern
+      let maxFid = apMap.get('Apple AirPods Max');
+      if (!maxFid) {
+        const { data: maxFams } = await supabase.from('product_families')
+          .select('id, title').in('category', ['airpods', 'AirPods']).ilike('title', '%Max%');
+        if (maxFams && maxFams.length > 0) {
+          maxFid = maxFams[0].id;
+          L('airpods', `Found AirPods Max family by pattern: id=${maxFid} title="${maxFams[0].title}"`);
+        }
+      }
+      let maxVars: { id: string; options: Record<string, string>; supplier_xmlid: string | null }[] = [];
+      if (maxFid) {
+        const { data: mv } = await supabase.from('variants').select('id, options, supplier_xmlid').eq('family_id', maxFid);
+        maxVars = (mv || []) as typeof maxVars;
+        L('airpods', `AirPods Max variants loaded: ${maxVars.length}, colors: ${maxVars.map(v => v.options?.colorLabel || '?').join(', ')}`);
+      } else {
+        L('airpods', 'WARNING: AirPods Max family not found in DB');
+      }
+
+      for (const item of airpodsItems) {
+        const ex = aExMap.get(normalizeXmlid(item.xmlid));
+        if (ex) {
+          const up: Record<string, unknown> = { price: item.price, supplier_xmlid: item.xmlid, options: { ...ex.options, raw: item.description, supplierTitle: item.description }, updated_at: now };
+          if (isSyncStock) up.in_stock = true;
+          const { error: e } = await supabase.from('variants').update(up).eq('id', ex.id);
+          if (!e) { updatedPricesCount++; if (item.parsed.isMax) airpodsMaxReport.matchedCount++; else airpodsReport.updatedCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`AirPods update: ${e.message}`);
+        } else if (item.parsed.isMax) {
+          if (item.parsed.colorLabel) {
+            const nc = normalizeColorForMatch(item.parsed.colorLabel);
+            // Match by colorLabel OR color (snake_case key)
+            const matchFn = (v: typeof maxVars[0]) => {
+              const vl = normalizeColorForMatch(v.options?.colorLabel || '');
+              if (vl === nc) return true;
+              const vc = (v.options?.color || '').toLowerCase().replace(/[\s_]+/g, '');
+              const pc = nc.replace(/[\s_]+/g, '');
+              return vc === pc;
+            };
+            const cm = maxVars.find(v => matchFn(v) && !v.supplier_xmlid)
+                     || maxVars.find(v => matchFn(v));
+            if (cm) {
+              const up: Record<string, unknown> = { price: item.price, supplier_xmlid: item.xmlid, options: { ...cm.options, raw: item.description, supplierTitle: item.description }, updated_at: now };
+              if (isSyncStock) up.in_stock = true;
+              if (cm.supplier_xmlid && normalizeXmlid(cm.supplier_xmlid) !== normalizeXmlid(item.xmlid)) {
+                const o = up.options as Record<string, unknown>;
+                o._xmlid_audit = [...((o._xmlid_audit as string[]) || []), `${cm.supplier_xmlid}→${item.xmlid}@${now}`];
+              }
+              const { error: e } = await supabase.from('variants').update(up).eq('id', cm.id);
+              if (!e) { updatedPricesCount++; airpodsMaxReport.boundXmlidCount++; if (isSyncStock) setInStockTrueCount++; }
+              else errors.push(`AirPods Max bind: ${e.message}`);
+              continue;
             }
           }
+          // Auto-create AirPods Max variant by color if family exists and color is known
+          if (maxFid && item.parsed.colorLabel) {
+            const cl = item.parsed.colorLabel;
+            const ck = colorToSnake(cl);
+            const ch = APMC_HEX[cl] || COLOR_HEX[cl] || '#888888';
+            if (ch !== '#888888') {
+              const { error: cErr } = await supabase.from('variants').insert({
+                family_id: maxFid,
+                options: { color: ck, colorLabel: cl, colorHex: ch, raw: item.description, supplierTitle: item.description },
+                images: [], price: item.price, in_stock: isSyncStock,
+                sku_code: `airpods-max-${ck}-${item.xmlid}`,
+                supplier_xmlid: item.xmlid,
+              });
+              if (!cErr) {
+                createdCount++; airpodsMaxReport.createdCount++;
+                if (isSyncStock) setInStockTrueCount++;
+                maxVars.push({ id: 'new', options: { color: ck, colorLabel: cl, colorHex: ch } as any, supplier_xmlid: item.xmlid });
+                continue;
+              }
+              errors.push(`AirPods Max create: ${cErr.message}`);
+            }
+          }
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: item.parsed.colorLabel ? 'unknown_color' : 'no_color_parsed', parsed: { color: item.parsed.colorLabel || '?', maxVariantsCount: String(maxVars.length), maxColors: maxVars.map(v => v.options?.colorLabel || v.options?.color || '?').join(',') } };
+          allNotFound.push(nf); airpodsMaxReport.notFoundCount++; if (airpodsMaxReport.examples.length < 10) airpodsMaxReport.examples.push(nf);
+        } else {
+          const fid = apMap.get(item.parsed.familyTitle);
+          if (!fid) { allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'no_family' }); continue; }
+          const { error: e } = await supabase.from('variants').insert({
+            family_id: fid, options: { raw: item.description, supplierTitle: item.description }, images: [], price: item.price,
+            in_stock: isSyncStock, sku_code: `airpods-${item.xmlid}`, supplier_xmlid: item.xmlid,
+          });
+          if (!e) { createdCount++; airpodsReport.createdCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`AirPods create: ${e.message}`);
         }
       }
+      L('airpods', `Done ${ms(t4)}ms. updated=${airpodsReport.updatedCount} created=${airpodsReport.createdCount} maxMatched=${airpodsMaxReport.matchedCount} maxBound=${airpodsMaxReport.boundXmlidCount} maxCreated=${airpodsMaxReport.createdCount} maxNF=${airpodsMaxReport.notFoundCount}`);
     }
 
     // ════════════════════════════════════════════════════════════════
-    // ── CLEANUP: remove orphan seed variants (no xmlid, price=0)
-    //    + deduplicate variants with same normalized xmlid
+    // ── PHASE 5: OTHER (iPad, MacBook) ──────────────────────────────
+    // ════════════════════════════════════════════════════════════════
+    if (otherItems.length > 0) {
+      const t5 = Date.now();
+      for (let i = 0; i < otherItems.length; i += 50) {
+        const batch = otherItems.slice(i, i + 50);
+        const xids = [...new Set([...batch.map(b => b.xmlid), ...batch.map(b => normalizeXmlid(b.xmlid))])];
+        const rows: any[] = [];
+        for (let j = 0; j < xids.length; j += 200) { const { data } = await supabase.from('variants').select('id, supplier_xmlid').in('supplier_xmlid', xids.slice(j, j + 200)); if (data) rows.push(...data); }
+        const em = new Map<string, string>(); for (const v of rows) em.set(normalizeXmlid(v.supplier_xmlid), v.id);
+        for (const item of batch) {
+          const vid = em.get(normalizeXmlid(item.xmlid));
+          if (!vid) { allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'no_match' }); otherReport.notFoundCount++; continue; }
+          const up: Record<string, unknown> = { price: item.price, updated_at: now };
+          if (isSyncStock) up.in_stock = true;
+          const { error: e } = await supabase.from('variants').update(up).eq('id', vid);
+          if (!e) { updatedPricesCount++; otherReport.updatedCount++; if (isSyncStock) setInStockTrueCount++; }
+          else errors.push(`Other: ${e.message}`);
+        }
+      }
+      L('other', `Done ${ms(t5)}ms. updated=${otherReport.updatedCount} nf=${otherReport.notFoundCount}`);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ── CLEANUP ─────────────────────────────────────────────────────
     // ════════════════════════════════════════════════════════════════
     {
-      const { data: orphans } = await supabase
-        .from('variants')
-        .select('id')
-        .is('supplier_xmlid', null)
-        .eq('price', 0)
-        .eq('in_stock', false);
-      const orphanIds = (orphans || []).map((o: { id: string }) => o.id);
-      if (orphanIds.length > 0) {
-        for (let i = 0; i < orphanIds.length; i += 200) {
-          const batch = orphanIds.slice(i, i + 200);
-          await supabase.from('variants').delete().in('id', batch);
-        }
-      }
+      const { data: orphans } = await supabase.from('variants').select('id').is('supplier_xmlid', null).eq('price', 0).eq('in_stock', false);
+      const oids = (orphans || []).map((o: { id: string }) => o.id);
+      for (let i = 0; i < oids.length; i += 200) await supabase.from('variants').delete().in('id', oids.slice(i, i + 200));
 
-      const { data: allVars } = await supabase
-        .from('variants')
-        .select('id, supplier_xmlid, in_stock')
-        .not('supplier_xmlid', 'is', null);
-      if (allVars) {
-        const grouped = new Map<string, typeof allVars>();
-        for (const v of allVars) {
-          const key = normalizeXmlid(v.supplier_xmlid);
-          if (!grouped.has(key)) grouped.set(key, []);
-          grouped.get(key)!.push(v);
-        }
-        const dupeIdsToDelete: string[] = [];
-        for (const [, group] of grouped) {
-          if (group.length <= 1) continue;
-          const inStock = group.find((v) => v.in_stock);
-          const keep = inStock || group[0];
-          for (const v of group) {
-            if (v.id !== keep.id) dupeIdsToDelete.push(v.id);
-          }
-        }
-        if (dupeIdsToDelete.length > 0) {
-          for (let i = 0; i < dupeIdsToDelete.length; i += 200) {
-            const batch = dupeIdsToDelete.slice(i, i + 200);
-            await supabase.from('variants').delete().in('id', batch);
-          }
-        }
+      const { data: allV } = await supabase.from('variants').select('id, supplier_xmlid, in_stock').not('supplier_xmlid', 'is', null);
+      if (allV) {
+        const g = new Map<string, typeof allV>(); for (const v of allV) { const k = normalizeXmlid(v.supplier_xmlid); if (!g.has(k)) g.set(k, []); g.get(k)!.push(v); }
+        const dd: string[] = [];
+        for (const [, gr] of g) { if (gr.length <= 1) continue; const keep = gr.find(v => v.in_stock) || gr[0]; for (const v of gr) if (v.id !== keep.id) dd.push(v.id); }
+        for (let i = 0; i < dd.length; i += 200) await supabase.from('variants').delete().in('id', dd.slice(i, i + 200));
+        if (dd.length > 0) L('cleanup', `Removed ${dd.length} duplicate variants`);
       }
     }
 
     // ════════════════════════════════════════════════════════════════
-    // ── RESPONSE ───────────────────────────────────────────────────
+    // ── VERIFY ──────────────────────────────────────────────────────
     // ════════════════════════════════════════════════════════════════
-    const result = {
-      updatedCount,
-      notFoundCount: notFound.length,
-      matchedExamples: matched.slice(0, 10),
-      notFoundExamples: notFound.slice(0, 10),
-      notFound,
-      errors,
-      watch: {
-        updatedCount: watchUpdatedCount,
-        createdCount: watchCreatedCount,
-        skippedCount: watchSkippedCount,
-        notFoundCount: watchNotFound.length,
-        createdExamples: watchCreated.slice(0, 5),
-        notFoundExamples: watchNotFound.slice(0, 5),
-      },
-      airpods: {
-        updatedCount: airpodsUpdatedCount,
-        createdCount: airpodsCreatedCount,
-        maxUpdatedCount: airpodsMaxUpdatedCount,
-        maxColorMatchedCount: airpodsMaxColorMatchedCount,
-        skippedCount: airpodsSkippedCount,
-        notFoundCount: airpodsNotFound.length,
-        notFoundExamples: airpodsNotFound.slice(0, 10),
-        maxNotFoundCount: airpodsMaxNotFound.length,
-        maxNotFoundExamples: airpodsMaxNotFound.slice(0, 10),
-      },
-    };
+    const verify: VerifyEntry[] = [];
+    if (verifyXmlids.length > 0) {
+      const vxExp = [...new Set([...verifyXmlids, ...verifyXmlids.map(normalizeXmlid)])];
+      const { data: vRows } = await supabase.from('variants')
+        .select('supplier_xmlid, in_stock, price, family_id').in('supplier_xmlid', vxExp);
+      const famIds = [...new Set((vRows || []).map((r: any) => r.family_id))];
+      const { data: famRows } = famIds.length > 0
+        ? await supabase.from('product_families').select('id, title').in('id', famIds)
+        : { data: [] };
+      const famMap = new Map<string, string>(); for (const f of famRows || []) famMap.set(f.id, f.title);
 
-    return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+      for (const xid of verifyXmlids) {
+        const row = (vRows || []).find((r: any) => normalizeXmlid(r.supplier_xmlid) === normalizeXmlid(xid));
+        verify.push({ xmlid: xid, found: !!row, in_stock: row ? row.in_stock : null, price: row ? row.price : null, familyTitle: row ? (famMap.get(row.family_id) || null) : null });
+      }
+      L('verify', JSON.stringify(verify));
+    }
+
+    if (isSyncStock) {
+      setInStockFalseCount = Math.max(0, setInStockFalseCount - setInStockTrueCount);
+    }
+
+    const ok = !(isSyncStock && disableAllAppleCount === 0) && iphoneCreateBudget >= 0;
+
+    L('done', `Total ${ms(T0)}ms. ok=${ok} prices=${updatedPricesCount} true=${setInStockTrueCount} false=${setInStockFalseCount} created=${createdCount} iphoneCreated=${iphoneReport.createdCount} nf=${allNotFound.length}`);
+
+    return new Response(JSON.stringify({
+      ok, requestId, mode,
+      appleFamiliesFoundCount, disableAllUpdatedCount: disableAllAppleCount,
+      totalRows: items.length,
+      appleRows: items.filter(i => i.categoryGuess !== 'other').length,
+      updatedPricesCount, setInStockTrueCount, setInStockFalseCount, createdCount,
+      notFoundCount: allNotFound.length,
+      skippedIpadCount, skippedMacCount,
+      iphone: iphoneReport, watch: watchReport, airpods: airpodsReport, airpodsMax: airpodsMaxReport, other: otherReport,
+      topNotFoundExamples: allNotFound.slice(0, 20),
+      verify, errors,
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
+    console.error(`[update-prices] FATAL: ${(err as Error).message}`);
+    return new Response(JSON.stringify({ ok: false, error: (err as Error).message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

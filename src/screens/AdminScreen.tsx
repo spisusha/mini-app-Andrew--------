@@ -96,11 +96,38 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
 // ═══════════════════════════════════════════════════════════════════════
 
 interface ParsedItem { xmlid: string; description: string; price: number; categoryGuess: string }
-interface ReportItem { xmlid: string; description: string; price: number }
+interface NotFoundEntry {
+  xmlid: string; description: string; price: number;
+  reason: string; parsed?: Record<string, string>; candidates?: number;
+}
+interface VerifyEntry { xmlid: string; found: boolean; in_stock: boolean | null; price: number | null; familyTitle: string | null }
 interface UpdateReport {
-  updatedCount: number; notFoundCount: number;
-  matchedExamples?: ReportItem[]; notFoundExamples?: ReportItem[];
-  notFound: ReportItem[]; outOfStockCount?: number; errors: string[];
+  ok: boolean;
+  requestId: string;
+  mode: 'prices_only' | 'sync_stock';
+  totalRows: number;
+  appleRows: number;
+  updatedPricesCount: number;
+  setInStockTrueCount: number;
+  setInStockFalseCount: number;
+  createdCount: number;
+  notFoundCount: number;
+  topNotFoundExamples: NotFoundEntry[];
+  errors: string[];
+  skippedIpadCount: number;
+  skippedMacCount: number;
+  iphone: {
+    matchedByXmlidCount: number; boundXmlidCount: number; ambiguousCount: number;
+    notFoundCount: number; createdCount: number; dedupedHits: number;
+    skippedOldCount: number; unknownColorCount: number;
+    examples: NotFoundEntry[];
+    createdExamples: { xmlid: string; description: string; familyTitle: string; storage: string; color: string; sim: string }[];
+  };
+  watch: { updatedCount: number; createdCount: number };
+  airpods: { updatedCount: number; createdCount: number };
+  airpodsMax: { matchedCount: number; boundXmlidCount: number; createdCount: number; notFoundCount: number; examples: NotFoundEntry[] };
+  other: { updatedCount: number; notFoundCount: number };
+  verify: VerifyEntry[];
 }
 type UpdateMode = 'prices_only' | 'sync_stock';
 
@@ -132,6 +159,204 @@ function parseXlsx(buffer: ArrayBuffer): ParsedItem[] {
     items.push({ xmlid, description, price, categoryGuess: guessCategory(description) });
   }
   return items;
+}
+
+function exportNotFoundCsv(entries: NotFoundEntry[]) {
+  const header = 'xmlid,description,price,reason,parsed_info,candidates';
+  const rows = entries.map((e) => {
+    const info = e.parsed ? Object.entries(e.parsed).map(([k, v]) => `${k}=${v}`).join('; ') : '';
+    return `"${e.xmlid}","${e.description.replace(/"/g, '""')}",${e.price},"${e.reason}","${info}",${e.candidates || ''}`;
+  });
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `not_found_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const REASON_LABELS: Record<string, string> = {
+  parse_fail: 'Не распознано',
+  no_family: 'Нет семейства',
+  no_match: 'Нет варианта',
+  ambiguous: 'Неоднозначно',
+  create_limit: 'Лимит создания',
+  bad_storage: 'Неверная память',
+  unknown_color: 'Неизв. цвет',
+  create_error: 'Ошибка создания',
+  no_variant_for_color: 'Нет варианта для цвета',
+};
+
+function PriceReport({ report }: { report: UpdateReport }) {
+  const ip = report.iphone;
+  const iphoneTotal = (ip?.matchedByXmlidCount || 0) + (ip?.boundXmlidCount || 0) + (ip?.dedupedHits || 0) + (ip?.createdCount || 0);
+
+  return (
+    <div className="admin-report">
+      <h3 className="admin-section-title">
+        Результат — {report.mode === 'sync_stock' ? 'Цены + наличие' : 'Только цены'}
+      </h3>
+
+      {/* Global stats */}
+      <div className="admin-stats">
+        <div className="admin-stat-card admin-stat-card--accent">
+          <span className="admin-stat-num">{report.updatedPricesCount}</span>
+          <span className="admin-stat-label">Цены обновлены</span>
+        </div>
+        {report.mode === 'sync_stock' && (
+          <>
+            <div className="admin-stat-card" style={{ borderLeft: '3px solid var(--color-success)' }}>
+              <span className="admin-stat-num">{report.setInStockTrueCount}</span>
+              <span className="admin-stat-label">in_stock = true</span>
+            </div>
+            <div className="admin-stat-card" style={{ borderLeft: '3px solid var(--color-danger)' }}>
+              <span className="admin-stat-num">{report.setInStockFalseCount}</span>
+              <span className="admin-stat-label">in_stock = false</span>
+            </div>
+            <div className="admin-stat-card">
+              <span className="admin-stat-num">{report.createdCount}</span>
+              <span className="admin-stat-label">Создано новых</span>
+            </div>
+          </>
+        )}
+        <div className="admin-stat-card admin-stat-card--warn">
+          <span className="admin-stat-num">{report.notFoundCount}</span>
+          <span className="admin-stat-label">Не найдено</span>
+        </div>
+      </div>
+
+      {/* Per-category breakdown */}
+      <h4 className="admin-section-title" style={{ marginTop: 16 }}>По категориям</h4>
+      <div className="admin-stats" style={{ flexWrap: 'wrap' }}>
+        {ip && (
+          <div className="admin-stat-card" style={{ flex: '1 1 100%' }}>
+            <span className="admin-stat-label" style={{ fontWeight: 600, marginBottom: 4 }}>iPhone</span>
+            <span className="admin-stat-label">
+              Обработано: {iphoneTotal} (xmlid: {ip.matchedByXmlidCount}, привязка: {ip.boundXmlidCount}{ip.dedupedHits > 0 ? `, дедуп: ${ip.dedupedHits}` : ''}, создано: {ip.createdCount || 0})
+              {ip.skippedOldCount > 0 && <> · Старые: {ip.skippedOldCount}</>}
+              {ip.unknownColorCount > 0 && <> · Неизв. цвет: {ip.unknownColorCount}</>}
+              {ip.ambiguousCount > 0 && <> · Неоднозначно: {ip.ambiguousCount}</>}
+              {ip.notFoundCount > 0 && <> · Не найдено: {ip.notFoundCount}</>}
+            </span>
+            {ip.createdExamples && ip.createdExamples.length > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--color-muted)', marginTop: 4 }}>
+                Созданы: {ip.createdExamples.map((e, i) => (
+                  <span key={i} style={{ display: 'block' }}>{e.familyTitle} {e.storage}GB {e.color} {e.sim} (xmlid:{e.xmlid})</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {report.watch && (
+          <div className="admin-stat-card">
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>Watch</span>
+            <span className="admin-stat-label">Обн: {report.watch.updatedCount} · Созд: {report.watch.createdCount}</span>
+          </div>
+        )}
+        {report.airpods && (
+          <div className="admin-stat-card">
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>AirPods</span>
+            <span className="admin-stat-label">Обн: {report.airpods.updatedCount} · Созд: {report.airpods.createdCount}</span>
+          </div>
+        )}
+        {report.airpodsMax && (
+          <div className="admin-stat-card">
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>AirPods Max</span>
+            <span className="admin-stat-label">
+              Привязано: {report.airpodsMax.matchedCount + report.airpodsMax.boundXmlidCount}
+              {(report.airpodsMax.createdCount || 0) > 0 && <> · Создано: {report.airpodsMax.createdCount}</>}
+              {report.airpodsMax.notFoundCount > 0 && <> · Не найдено: {report.airpodsMax.notFoundCount}</>}
+            </span>
+          </div>
+        )}
+        {report.other && report.other.updatedCount > 0 && (
+          <div className="admin-stat-card">
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>MacBook/Other</span>
+            <span className="admin-stat-label">Обн: {report.other.updatedCount} · Не найдено: {report.other.notFoundCount}</span>
+          </div>
+        )}
+        {(report.skippedIpadCount > 0 || (report.skippedMacCount || 0) > 0 || report.iphone?.skippedOldCount > 0) && (
+          <div className="admin-stat-card" style={{ flex: '1 1 100%', opacity: 0.7 }}>
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>Пропущено</span>
+            <span className="admin-stat-label">
+              {[
+                report.skippedIpadCount > 0 && `iPad: ${report.skippedIpadCount}`,
+                (report.skippedMacCount || 0) > 0 && `Mac: ${report.skippedMacCount}`,
+                report.iphone?.skippedOldCount > 0 && `Старые iPhone: ${report.iphone.skippedOldCount}`,
+              ].filter(Boolean).join(' · ')}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Errors */}
+      {report.errors.length > 0 && (
+        <div className="admin-errors"><h4>Ошибки ({report.errors.length}):</h4>{report.errors.slice(0, 10).map((err, i) => <p key={i} className="admin-error">{err}</p>)}</div>
+      )}
+
+      {/* Not found / ambiguous table */}
+      {report.topNotFoundExamples && report.topNotFoundExamples.length > 0 && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 }}>
+            <h4 className="admin-section-title" style={{ margin: 0 }}>Не найдено / Неоднозначно ({report.notFoundCount})</h4>
+            <button className="btn btn-outline btn-sm" onClick={() => exportNotFoundCsv(report.topNotFoundExamples)}>
+              Экспорт CSV
+            </button>
+          </div>
+          <div className="admin-table-wrap" style={{ marginTop: 8 }}>
+            <table className="admin-table">
+              <thead><tr><th>xmlid</th><th>description</th><th>price</th><th>причина</th><th>parsed</th></tr></thead>
+              <tbody>
+                {report.topNotFoundExamples.map((nf, i) => (
+                  <tr key={i}>
+                    <td className="admin-td-mono">{nf.xmlid}</td>
+                    <td>{nf.description}</td>
+                    <td className="admin-td-price">{nf.price.toLocaleString('ru-RU')}</td>
+                    <td><span className={`admin-cat admin-cat--${nf.reason === 'ambiguous' ? 'watch' : 'other'}`}>
+                      {REASON_LABELS[nf.reason] || nf.reason}{nf.candidates ? ` (${nf.candidates})` : ''}
+                    </span></td>
+                    <td style={{ fontSize: 11, color: 'var(--color-muted)' }}>
+                      {nf.parsed ? Object.entries(nf.parsed).map(([k, v]) => `${k}=${v}`).join(', ') : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {/* Verify spot-check */}
+      {report.verify && report.verify.length > 0 && (
+        <>
+          <h4 className="admin-section-title" style={{ marginTop: 16 }}>Контрольная проверка (verify)</h4>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead><tr><th>xmlid</th><th>found</th><th>in_stock</th><th>price</th><th>family</th></tr></thead>
+              <tbody>
+                {report.verify.map((v, i) => (
+                  <tr key={i}>
+                    <td className="admin-td-mono">{v.xmlid}</td>
+                    <td>{v.found ? '✅' : '❌'}</td>
+                    <td>{v.in_stock === null ? '—' : v.in_stock ? '✅ true' : '❌ false'}</td>
+                    <td className="admin-td-price">{v.price !== null ? v.price.toLocaleString('ru-RU') : '—'}</td>
+                    <td style={{ fontSize: 12 }}>{v.familyTitle || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {/* RequestId + ok status */}
+      <p style={{ fontSize: 11, color: 'var(--color-muted)', marginTop: 12, textAlign: 'center' }}>
+        RequestId: {report.requestId} · ok: {report.ok ? 'true' : 'FALSE'}
+      </p>
+    </div>
+  );
 }
 
 function PricesTab() {
@@ -166,15 +391,22 @@ function PricesTab() {
     if (appleItems.length === 0) return;
     const auth = getAuth();
     if (!auth) return;
+    const rid = crypto.randomUUID();
     setLoading(true); setError(''); setReport(null);
     try {
       const payload = {
         items: appleItems.map((i) => ({ xmlid: i.xmlid, price: i.price, description: i.description, categoryGuess: i.categoryGuess })),
         mode,
+        requestId: rid,
       };
+      console.log(`[update-prices] requestId=${rid} mode=${mode} items=${appleItems.length}`);
       const result = await callFn<UpdateReport>('update-prices', payload, auth.token);
+      console.log(`[update-prices] response:`, result);
       setReport(result);
-    } catch (err) { setError(`Ошибка: ${err instanceof Error ? err.message : err}`); }
+      if (result.ok === false) {
+        setError(`Синхронизация завершилась с ошибкой (ok=false). RequestId: ${rid}. Проверьте Supabase Function Logs.`);
+      }
+    } catch (err) { setError(`Ошибка: ${err instanceof Error ? err.message : err}. RequestId: ${rid}`); }
     finally { setLoading(false); }
   };
 
@@ -232,43 +464,18 @@ function PricesTab() {
             </label>
           </div>
 
+          <p className="admin-mode-indicator">
+            Режим: <strong>{mode === 'prices_only' ? 'Только цены' : 'Цены + синхронизация наличия'}</strong>
+          </p>
           <button className="btn btn-primary btn-block admin-update-btn" onClick={handleUpdate} disabled={loading}>
-            {loading ? 'Обновляем...' : `Обновить цены (${appleItems.length} позиций)`}
+            {loading ? 'Обновляем...' : mode === 'prices_only'
+              ? `Обновить цены (${appleItems.length} позиций)`
+              : `Обновить цены и наличие (${appleItems.length} позиций)`}
           </button>
         </>
       )}
 
-      {report && (
-        <div className="admin-report">
-          <h3 className="admin-section-title">Результат</h3>
-          <div className="admin-stats">
-            <div className="admin-stat-card admin-stat-card--accent"><span className="admin-stat-num">{report.updatedCount}</span><span className="admin-stat-label">Обновлено</span></div>
-            <div className="admin-stat-card admin-stat-card--warn"><span className="admin-stat-num">{report.notFoundCount}</span><span className="admin-stat-label">Не найдено</span></div>
-            {report.outOfStockCount !== undefined && (
-              <div className="admin-stat-card"><span className="admin-stat-num">{report.outOfStockCount}</span><span className="admin-stat-label">Убрано из наличия</span></div>
-            )}
-          </div>
-          {report.errors.length > 0 && (
-            <div className="admin-errors"><h4>Ошибки:</h4>{report.errors.map((err, i) => <p key={i} className="admin-error">{err}</p>)}</div>
-          )}
-          {report.matchedExamples && report.matchedExamples.length > 0 && (
-            <>
-              <h4 className="admin-section-title" style={{ marginTop: 16 }}>Обновлено (примеры, до 10)</h4>
-              <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>xmlid</th><th>description</th><th>price</th></tr></thead><tbody>
-                {report.matchedExamples.map((m, i) => <tr key={i}><td className="admin-td-mono">{m.xmlid}</td><td>{m.description}</td><td className="admin-td-price">{m.price.toLocaleString('ru-RU')}</td></tr>)}
-              </tbody></table></div>
-            </>
-          )}
-          {report.notFoundExamples && report.notFoundExamples.length > 0 && (
-            <>
-              <h4 className="admin-section-title" style={{ marginTop: 16 }}>Не найдено в базе ({report.notFoundCount})</h4>
-              <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>xmlid</th><th>description</th><th>price</th></tr></thead><tbody>
-                {report.notFoundExamples.map((nf, i) => <tr key={i}><td className="admin-td-mono">{nf.xmlid}</td><td>{nf.description}</td><td className="admin-td-price">{nf.price.toLocaleString('ru-RU')}</td></tr>)}
-              </tbody></table></div>
-            </>
-          )}
-        </div>
-      )}
+      {report && <PriceReport report={report} />}
     </>
   );
 }

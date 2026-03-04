@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Variant } from '../domain/types';
 
 export const CONF_COLOR_KEYS = new Set(['color', 'colorHex', 'colorLabel']);
-export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market']);
+export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market', '_xmlid_audit']);
 
 export interface ColorEntry {
   color: string;
@@ -92,14 +92,15 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
 
   const colorEntries = useMemo((): ColorEntry[] => {
     if (!hasColorOptions) return [];
-    const seen = new Set<string>();
-    return variants.reduce<ColorEntry[]>((acc, v) => {
+    const seen = new Map<string, ColorEntry>();
+    for (const v of variants) {
       const hex = v.options.colorHex;
-      if (!hex || seen.has(hex)) return acc;
-      seen.add(hex);
-      acc.push({ hex, color: v.options.color || '', label: v.options.colorLabel || v.options.color || hex });
-      return acc;
-    }, []);
+      if (!hex) continue;
+      const key = (v.options.color || v.options.colorLabel || hex).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.set(key, { hex, color: v.options.color || '', label: v.options.colorLabel || v.options.color || hex });
+    }
+    return [...seen.values()];
   }, [variants, hasColorOptions]);
 
   const nonColorKeys = useMemo(() => {
@@ -115,8 +116,13 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
   const allOptionValues = useMemo(() => {
     const result: Record<string, string[]> = {};
     for (const key of nonColorKeys) {
-      const vals = [...new Set(variants.map((v) => v.options[key]).filter((v): v is string => !!v))];
-      result[key] = sortValues(key, vals);
+      const raw = variants.map((v) => v.options[key]).filter((v): v is string => !!v);
+      if (key === 'storage') {
+        const nums = [...new Set(raw.map((v) => String(parseInt(v) || v)))];
+        result[key] = nums.sort((a, b) => Number(a) - Number(b));
+      } else {
+        result[key] = sortValues(key, [...new Set(raw)]);
+      }
     }
     return result;
   }, [variants, nonColorKeys]);

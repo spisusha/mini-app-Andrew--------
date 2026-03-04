@@ -212,3 +212,10 @@
   margin-bottom: 8px;
   color: var(--color-danger);
 }
+
+.admin-mode-indicator {
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-bottom: 8px;
+}

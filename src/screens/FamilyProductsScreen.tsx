@@ -39,11 +39,24 @@ export default function FamilyProductsScreen() {
   const deduped = useMemo(() => {
     const seen = new Map<string, Variant>();
     for (const v of familyVariants) {
-      const key = v.supplier_xmlid
+      // Deduplicate by supplier_xmlid first
+      const xmlKey = v.supplier_xmlid
         ? v.supplier_xmlid.replace(/^0+/, '') || '0'
-        : v.id;
-      const prev = seen.get(key);
-      if (!prev || (v.in_stock && !prev.in_stock)) seen.set(key, v);
+        : null;
+      if (xmlKey) {
+        const prev = seen.get(`x:${xmlKey}`);
+        if (!prev || (v.in_stock && !prev.in_stock)) seen.set(`x:${xmlKey}`, v);
+        continue;
+      }
+      // For variants without xmlid, deduplicate by options signature
+      const sig = Object.entries(v.options)
+        .filter(([k]) => !['raw', 'supplierTitle', '_xmlid_audit', 'line'].includes(k))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, val]) => `${k}=${val}`)
+        .join('|');
+      const optKey = `o:${sig}`;
+      const prev = seen.get(optKey);
+      if (!prev || (v.in_stock && !prev.in_stock)) seen.set(optKey, v);
     }
     return [...seen.values()];
   }, [familyVariants]);
