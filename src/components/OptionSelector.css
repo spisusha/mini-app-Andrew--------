@@ -1,0 +1,57 @@
+.option-selector {
+  margin-bottom: 16px;
+}
+
+.option-selector__label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  margin-bottom: 8px;
+}
+
+.option-selector__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  padding: 8px 16px;
+  border-radius: 99px;
+  border: 1.5px solid var(--color-border);
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--color-surface);
+  color: var(--color-text);
+  transition: all 0.15s;
+}
+
+.chip:active {
+  transform: scale(0.96);
+}
+
+.chip--active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.chip--disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.option-toast {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-muted);
+  animation: option-toast-fade 1.5s ease forwards;
+}
+
+@keyframes option-toast-fade {
+  0%   { opacity: 0; transform: translateY(-3px); }
+  15%  { opacity: 1; transform: translateY(0); }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}

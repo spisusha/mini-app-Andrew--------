@@ -1,0 +1,240 @@
+/* ── Login ── */
+
+.media-login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+
+.media-login__form {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Header ── */
+
+.media-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.media-header .page-title {
+  margin-bottom: 0;
+}
+
+.media-logout {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
+/* ── Sections ── */
+
+.media-section {
+  margin-bottom: 24px;
+}
+
+.media-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+}
+
+.media-subtitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.media-empty {
+  font-size: 14px;
+  color: var(--color-muted);
+}
+
+/* ── Inputs ── */
+
+.media-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.media-input:focus {
+  border-color: var(--color-primary);
+}
+
+.media-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+.media-file-input {
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+/* ── Image grid ── */
+
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.media-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.media-card__img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+}
+
+.media-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+}
+
+.media-card__idx {
+  font-size: 12px;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+/* ── Previews ── */
+
+.media-previews {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.media-preview-img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+
+/* ── Mode selector ── */
+
+.media-mode {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.media-mode-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1.5px solid var(--color-border);
+  transition: all 0.15s;
+}
+
+.media-mode-opt.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-light);
+}
+
+.media-mode-opt input {
+  display: none;
+}
+
+.media-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+
+.media-checkbox input {
+  accent-color: var(--color-primary);
+  width: 16px;
+  height: 16px;
+}
+
+/* ── Toolbar ── */
+
+.media-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+/* ── Button variants ── */
+
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+  border: none;
+}
+
+.btn-danger-outline {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.btn-danger-outline:active {
+  background: rgba(255, 59, 48, 0.08);
+}
+
+/* ── Messages ── */
+
+.media-success {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(52, 199, 89, 0.1);
+  border-radius: var(--radius-sm);
+  color: var(--color-success);
+  font-size: 14px;
+  font-weight: 500;
+}

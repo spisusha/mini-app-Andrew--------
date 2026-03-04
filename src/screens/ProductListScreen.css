@@ -1,0 +1,8 @@
+.list-filter-desc {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--color-primary-light);
+  border-radius: var(--radius-sm);
+}

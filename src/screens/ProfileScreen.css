@@ -1,0 +1,131 @@
+.profile-page {
+  padding-top: 20px;
+}
+
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 24px;
+}
+
+.profile-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-primary), #4CAF50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.profile-avatar__letter {
+  font-size: 26px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.profile-info {
+  min-width: 0;
+}
+
+.profile-name {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.profile-username {
+  font-size: 14px;
+  color: var(--color-primary);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.profile-id {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.profile-section {
+  margin-bottom: 20px;
+}
+
+.profile-section h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.profile-about {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+}
+
+.profile-about p {
+  font-size: 14px;
+  color: var(--color-muted);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.profile-about p:last-child {
+  margin-bottom: 0;
+}
+
+.profile-about__lead {
+  font-size: 16px !important;
+  font-weight: 600;
+  color: var(--color-text) !important;
+}
+
+.profile-about__note {
+  font-weight: 500;
+  color: var(--color-primary) !important;
+}
+
+.profile-contact-link {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.profile-contact-link:hover,
+.profile-contact-link:active {
+  text-decoration: underline;
+}
+
+.profile-contacts {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.profile-contact-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.profile-contact-row:last-child {
+  border-bottom: none;
+}
+
+.profile-version {
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 8px;
+  padding-bottom: 8px;
+}

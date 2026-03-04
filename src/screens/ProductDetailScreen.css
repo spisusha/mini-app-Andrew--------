@@ -1,0 +1,181 @@
+.detail-page {
+  padding-top: 8px;
+}
+
+.detail-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 12px;
+}
+
+.detail-gallery {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.detail-gallery img {
+  max-height: 240px;
+  object-fit: contain;
+}
+
+.detail-dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.detail-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.detail-dot.active {
+  background: var(--color-primary);
+}
+
+.detail-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.detail-desc {
+  font-size: 14px;
+  color: var(--color-muted);
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.detail-options {
+  margin-bottom: 16px;
+}
+
+.detail-price-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.detail-price {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.detail-no-variant {
+  font-size: 16px;
+  color: var(--color-muted);
+}
+
+.detail-disclaimer {
+  font-size: 11px;
+  color: var(--color-muted);
+  margin-bottom: 16px;
+}
+
+.detail-add {
+  margin-bottom: 24px;
+}
+
+.detail-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.detail-add--done {
+  background: var(--color-success);
+}
+
+.detail-add--out {
+  background: var(--color-muted);
+  border-color: var(--color-muted);
+}
+
+/* ── Color picker ── */
+
+.color-picker {
+  margin-bottom: 16px;
+}
+
+.color-picker__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.color-swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--swatch-color);
+  border: 2.5px solid transparent;
+  outline: none;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.color-swatch:active {
+  transform: scale(0.93);
+}
+
+.color-swatch--active {
+  border-color: var(--color-primary);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.08),
+    0 0 0 2px var(--color-bg, #fff),
+    0 0 0 4px var(--color-primary);
+}
+
+
+.color-picker__label {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text);
+  margin-top: 4px;
+}
+
+/* ── Watch specs list ── */
+
+.watch-specs {
+  margin-bottom: 16px;
+}
+
+.watch-specs__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.watch-specs__list li {
+  padding: 10px 14px;
+  font-size: 13.5px;
+  line-height: 1.35;
+  border-bottom: 1px solid var(--color-border, #eee);
+}
+
+.watch-specs__list li:last-child {
+  border-bottom: none;
+}

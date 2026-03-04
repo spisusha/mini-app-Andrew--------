@@ -1,0 +1,60 @@
+/* ── Unified admin shell ── */
+
+.admin-login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+
+.admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.admin-topbar .page-title {
+  margin-bottom: 0;
+}
+
+.admin-topbar__logout {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
+.admin-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1.5px solid var(--color-border);
+}
+
+.admin-tab {
+  flex: 1;
+  padding: 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.admin-tab:not(:last-child) {
+  border-right: 1.5px solid var(--color-border);
+}
+
+.admin-tab--active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.admin-tab:active {
+  transform: scale(0.98);
+}
