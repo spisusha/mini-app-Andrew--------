@@ -3,14 +3,15 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: var(--nav-height);
+  height: calc(var(--nav-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-around;
   z-index: 100;
+  box-sizing: border-box;
 }
 
 .nav-item {
@@ -21,7 +22,7 @@
   font-size: 10px;
   color: var(--color-muted);
   transition: color 0.15s;
-  padding: 6px 16px;
+  padding: 10px 16px 6px;
 }
 
 .nav-item.active {
