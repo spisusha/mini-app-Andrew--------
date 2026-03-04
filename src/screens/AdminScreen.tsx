@@ -605,7 +605,7 @@ function IPhoneMediaSection() {
 
   useEffect(() => {
     if (!supabase) return;
-    supabase.from('product_families').select('id, title').order('title').then(({ data }) => { if (data) setFamilies(data); });
+    supabase.from('product_families').select('id, title').eq('category', 'iphone').order('title').then(({ data }) => { if (data) setFamilies(data); });
   }, []);
 
   useEffect(() => {

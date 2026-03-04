@@ -143,7 +143,13 @@ const APMC: Record<string,string> = { midnight:'Midnight',starlight:'Starlight',
 const APMC_HEX: Record<string,string> = { Midnight:'#1E1E2E',Starlight:'#F0E8D8',Orange:'#F5A623',Purple:'#8B72BE',Blue:'#3478F6','Space Gray':'#8D8D92',Silver:'#C0C0C0',Green:'#394F3E',Pink:'#F2A9B7','Sky Blue':'#87CEEB',Red:'#BF0013' };
 function parseAirPods(desc: string): ParsedAirPods | null {
   const d = desc.toLowerCase();
-  if (/airpods\s*max/i.test(desc)) { let cl: string|undefined; for (const [k,v] of Object.entries(APMC)) if (d.includes(k)){cl=v;break;} return { familyTitle:'Apple AirPods Max', isMax:true, colorLabel:cl }; }
+  if (/airpods\s*max/i.test(desc)) {
+    const stripped = d.replace(/\([^)]*\)/g, ' ').replace(/\/[a-z0-9]+\//gi, ' ').replace(/\s+/g, ' ');
+    let cl: string | undefined;
+    for (const [k, v] of Object.entries(APMC)) if (stripped.includes(k)) { cl = v; break; }
+    if (!cl) { for (const [k, v] of Object.entries(APMC)) if (d.includes(k)) { cl = v; break; } }
+    return { familyTitle: 'Apple AirPods Max', isMax: true, colorLabel: cl };
+  }
   if (/airpods\s*pro\s*3/i.test(desc)) return { familyTitle:'Apple AirPods Pro 3', isMax:false };
   if (/airpods\s*pro\s*(?:2|\(2)/i.test(desc)) return { familyTitle:'Apple AirPods Pro 2', isMax:false };
   if (/airpods\s*4/i.test(desc)) { if (/anc|noise\s*cancell|шумоподав/i.test(desc)) return { familyTitle:'Apple AirPods 4 (ANC)', isMax:false }; return { familyTitle:'Apple AirPods 4', isMax:false }; }
@@ -416,8 +422,9 @@ Deno.serve(async (req) => {
         if (p) watchItems.push({ ...item, parsed: p });
         else allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' });
       } else if (/air\s*pods/i.test(item.description)) {
-        if (APACC.test(item.description)) continue;
         const p = parseAirPods(item.description);
+        if (p && p.isMax) { airpodsItems.push({ ...item, parsed: p }); continue; }
+        if (APACC.test(item.description)) continue;
         if (p) airpodsItems.push({ ...item, parsed: p });
         else allNotFound.push({ xmlid: item.xmlid, description: item.description, price: item.price, reason: 'parse_fail' });
       } else if (item.categoryGuess === 'macbook' || item.categoryGuess === 'mac' || /\b(macbook|mac\s?book)\b/i.test(item.description)) {
@@ -1040,24 +1047,32 @@ Deno.serve(async (req) => {
             const cl = item.parsed.colorLabel;
             const ck = colorToSnake(cl);
             const ch = APMC_HEX[cl] || COLOR_HEX[cl] || '#888888';
-            if (ch !== '#888888') {
-              const { error: cErr } = await supabase.from('variants').insert({
-                family_id: maxFid,
-                options: { color: ck, colorLabel: cl, colorHex: ch, raw: item.description, supplierTitle: item.description },
-                images: [], price: item.price, in_stock: isSyncStock,
-                sku_code: `airpods-max-${ck}-${item.xmlid}`,
-                supplier_xmlid: item.xmlid,
-              });
-              if (!cErr) {
-                createdCount++; airpodsMaxReport.createdCount++;
-                if (isSyncStock) setInStockTrueCount++;
-                maxVars.push({ id: 'new', options: { color: ck, colorLabel: cl, colorHex: ch } as any, supplier_xmlid: item.xmlid });
-                continue;
-              }
-              errors.push(`AirPods Max create: ${cErr.message}`);
+            const dedupExisting = maxVars.find(v => (v.options?.colorLabel || '').toLowerCase() === cl.toLowerCase() || (v.options?.color || '').toLowerCase() === ck);
+            if (dedupExisting) {
+              const up2: Record<string, unknown> = { price: item.price, supplier_xmlid: item.xmlid, options: { ...dedupExisting.options, raw: item.description, supplierTitle: item.description }, updated_at: now };
+              if (isSyncStock) up2.in_stock = true;
+              await supabase.from('variants').update(up2).eq('id', dedupExisting.id);
+              updatedPricesCount++; airpodsMaxReport.boundXmlidCount++;
+              if (isSyncStock) setInStockTrueCount++;
+              continue;
             }
+            const { error: cErr } = await supabase.from('variants').insert({
+              family_id: maxFid,
+              options: { color: ck, colorLabel: cl, colorHex: ch, raw: item.description, supplierTitle: item.description },
+              images: [], price: item.price, in_stock: isSyncStock,
+              sku_code: `airpods-max-${ck}-${item.xmlid}`,
+              supplier_xmlid: item.xmlid,
+            });
+            if (!cErr) {
+              createdCount++; airpodsMaxReport.createdCount++;
+              if (isSyncStock) setInStockTrueCount++;
+              maxVars.push({ id: 'new', options: { color: ck, colorLabel: cl, colorHex: ch } as any, supplier_xmlid: item.xmlid });
+              continue;
+            }
+            errors.push(`AirPods Max create: ${cErr.message}`);
           }
-          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason: item.parsed.colorLabel ? 'unknown_color' : 'no_color_parsed', parsed: { color: item.parsed.colorLabel || '?', maxVariantsCount: String(maxVars.length), maxColors: maxVars.map(v => v.options?.colorLabel || v.options?.color || '?').join(',') } };
+          const reason = !maxFid ? 'no_family_max' : !item.parsed.colorLabel ? 'no_color_parsed' : 'no_variant_for_color';
+          const nf: NotFoundEntry = { xmlid: item.xmlid, description: item.description, price: item.price, reason, parsed: { color: item.parsed.colorLabel || '?', maxFamilyFound: String(!!maxFid), maxVariantsCount: String(maxVars.length), maxColors: maxVars.map(v => v.options?.colorLabel || v.options?.color || '?').join(',') } };
           allNotFound.push(nf); airpodsMaxReport.notFoundCount++; if (airpodsMaxReport.examples.length < 10) airpodsMaxReport.examples.push(nf);
         } else {
           const fid = apMap.get(item.parsed.familyTitle);
