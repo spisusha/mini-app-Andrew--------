@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Variant } from '../domain/types';
 
 export const CONF_COLOR_KEYS = new Set(['color', 'colorHex', 'colorLabel']);
-export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market', '_xmlid_audit', 'chip', 'model']);
+export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market', '_xmlid_audit', 'chip', 'model', 'ruKeyboard']);
 
 export interface ColorEntry {
   color: string;

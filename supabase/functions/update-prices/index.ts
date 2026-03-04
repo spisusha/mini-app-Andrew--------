@@ -250,6 +250,7 @@ interface ParsedMacBook {
   familyTitle: string; line: string; size: string;
   chip?: string; memStorage?: string;
   colorLabel?: string; colorKey?: string; colorHex?: string;
+  ruKeyboard: boolean;
 }
 
 const MAC_COLORS: Record<string, [string, string]> = {
@@ -328,7 +329,9 @@ function parseMacBook(desc: string): ParsedMacBook | null {
     }
   }
 
-  return { familyTitle, line, size, chip, memStorage, colorLabel, colorKey, colorHex };
+  const ruKeyboard = /RU\s*кл|RU\s*клав|RU\s*keys/i.test(desc);
+
+  return { familyTitle, line, size, chip, memStorage, colorLabel, colorKey, colorHex, ruKeyboard };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -372,7 +375,7 @@ Deno.serve(async (req) => {
     const airpodsReport = { updatedCount: 0, createdCount: 0 };
     const airpodsMaxReport = { matchedCount: 0, boundXmlidCount: 0, createdCount: 0, notFoundCount: 0, examples: [] as NotFoundEntry[] };
     const ipadReport = { updatedCount: 0, createdCount: 0, dedupHits: 0, notFoundCount: 0, examples: [] as NotFoundEntry[] };
-    const macbookReport = { updatedCount: 0, createdCount: 0, dedupHits: 0, notFoundCount: 0, examples: [] as NotFoundEntry[], createdExamples: [] as { xmlid: string; description: string; family: string; chip: string; memStorage: string }[] };
+    const macbookReport = { updatedCount: 0, createdCount: 0, dedupHits: 0, notFoundCount: 0, ruCount: 0, examples: [] as NotFoundEntry[], createdExamples: [] as { xmlid: string; description: string; family: string; chip: string; memStorage: string }[] };
     const debugMacbook: { xmlid: string; desc: string; parsed: ParsedMacBook | null; action: string }[] = [];
     const otherReport = { updatedCount: 0, notFoundCount: 0 };
     const allNotFound: NotFoundEntry[] = [];
@@ -875,7 +878,7 @@ Deno.serve(async (req) => {
           };
           if (isSyncStock) up.in_stock = true;
           const { error: e } = await supabase.from('variants').update(up).eq('id', ex.id);
-          if (!e) { updatedPricesCount++; macbookReport.updatedCount++; if (isSyncStock) setInStockTrueCount++; }
+          if (!e) { updatedPricesCount++; macbookReport.updatedCount++; if (isSyncStock) setInStockTrueCount++; if (item.parsed.ruKeyboard) macbookReport.ruCount++; }
           else errors.push(`MacBook update: ${e.message}`);
           if (dbg) debugMacbook.push({ xmlid: item.xmlid, desc: item.description.slice(0, 80), parsed: item.parsed, action: 'matched_xmlid' });
           continue;
@@ -899,13 +902,14 @@ Deno.serve(async (req) => {
           L('macbook', `Created family "${p.familyTitle}" id=${fid}`);
         }
 
-        // Dedup: match by chip + memStorage + color in same family
+        // Dedup: match by chip + memStorage + color + ruKeyboard in same family
         const dedupMatch = allMbVariants.find((v: any) => {
           if (v.family_id !== fid) return false;
           const o = v.options as Record<string, string>;
           if (p.chip && String(o.chip || '') !== p.chip) return false;
           if (p.memStorage && String(o.memStorage || '') !== p.memStorage) return false;
           if (p.colorKey && (o.color || '').toLowerCase() !== p.colorKey) return false;
+          if (Boolean(p.ruKeyboard) !== Boolean(o.ruKeyboard)) return false;
           return true;
         });
 
@@ -917,7 +921,7 @@ Deno.serve(async (req) => {
           };
           if (isSyncStock) up.in_stock = true;
           const { error: e } = await supabase.from('variants').update(up).eq('id', dedupMatch.id);
-          if (!e) { updatedPricesCount++; macbookReport.dedupHits++; if (isSyncStock) setInStockTrueCount++; mExMap.set(nx, dedupMatch); }
+          if (!e) { updatedPricesCount++; macbookReport.dedupHits++; if (isSyncStock) setInStockTrueCount++; mExMap.set(nx, dedupMatch); if (p.ruKeyboard) macbookReport.ruCount++; }
           else errors.push(`MacBook dedup-bind: ${e.message}`);
           if (dbg) debugMacbook.push({ xmlid: item.xmlid, desc: item.description.slice(0, 80), parsed: item.parsed, action: 'dedup_bind' });
           continue;
@@ -931,6 +935,7 @@ Deno.serve(async (req) => {
         if (p.chip) newOpts.chip = p.chip;
         if (p.memStorage) newOpts.memStorage = p.memStorage;
         if (p.colorLabel) { newOpts.colorLabel = p.colorLabel; newOpts.colorHex = p.colorHex || '#888888'; newOpts.color = p.colorKey || colorToSnake(p.colorLabel); }
+        if (p.ruKeyboard) newOpts.ruKeyboard = true;
         const skuParts = ['macbook', p.line.toLowerCase(), p.size, p.chip || 'x', p.memStorage?.replace('/', '-') || 'x', item.xmlid].join('-');
 
         const { error: cErr } = await supabase.from('variants').insert({
@@ -940,6 +945,7 @@ Deno.serve(async (req) => {
         if (!cErr) {
           createdCount++; macbookReport.createdCount++;
           if (isSyncStock) setInStockTrueCount++;
+          if (p.ruKeyboard) macbookReport.ruCount++;
           allMbVariants.push({ id: 'new-' + item.xmlid, family_id: fid, options: newOpts, supplier_xmlid: item.xmlid });
           if (macbookReport.createdExamples.length < 5) {
             macbookReport.createdExamples.push({ xmlid: item.xmlid, description: item.description, family: p.familyTitle, chip: p.chip || '?', memStorage: p.memStorage || '?' });

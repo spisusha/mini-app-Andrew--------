@@ -114,7 +114,7 @@ interface UpdateReport {
   notFoundCount: number;
   topNotFoundExamples: NotFoundEntry[];
   errors: string[];
-  macbook: { updatedCount: number; createdCount: number; dedupHits: number; notFoundCount: number; examples: NotFoundEntry[]; createdExamples: { xmlid: string; description: string; family: string; chip: string; memStorage: string }[] };
+  macbook: { updatedCount: number; createdCount: number; dedupHits: number; notFoundCount: number; ruCount: number; examples: NotFoundEntry[]; createdExamples: { xmlid: string; description: string; family: string; chip: string; memStorage: string }[] };
   iphone: {
     matchedByXmlidCount: number; boundXmlidCount: number; ambiguousCount: number;
     notFoundCount: number; createdCount: number; dedupedHits: number;
@@ -258,6 +258,7 @@ function PriceReport({ report }: { report: UpdateReport }) {
               Обн: {report.macbook.updatedCount} · Созд: {report.macbook.createdCount}
               {report.macbook.dedupHits > 0 && <> · Дедуп: {report.macbook.dedupHits}</>}
               {report.macbook.notFoundCount > 0 && <> · НФ: {report.macbook.notFoundCount}</>}
+              {report.macbook.ruCount > 0 && <> · RU: {report.macbook.ruCount}</>}
             </span>
           </div>
         )}

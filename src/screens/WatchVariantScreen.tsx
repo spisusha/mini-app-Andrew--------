@@ -50,6 +50,7 @@ export default function SkuVariantScreen() {
     if (opts.chip) parts.push(String(opts.chip));
     if (opts.memStorage) parts.push(String(opts.memStorage));
     if (opts.colorLabel) parts.push(String(opts.colorLabel));
+    if (opts.ruKeyboard) parts.push('RU');
     subtitleParts = parts;
   } else {
     title = family.title;
