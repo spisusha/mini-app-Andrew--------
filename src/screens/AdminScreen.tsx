@@ -798,7 +798,7 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
 
   const [families, setFamilies] = useState<Family[]>([]);
   const [familyId, setFamilyId] = useState('');
-  const [variants, setVariants] = useState<VariantRow[]>([]);
+  const [, setVariants] = useState<VariantRow[]>([]);
   const [colors, setColors] = useState<string[]>([]);
   const [colorLabel, setColorLabel] = useState('');
   const [currentImages, setCurrentImages] = useState<string[]>([]);
