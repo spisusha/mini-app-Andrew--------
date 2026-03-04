@@ -24,6 +24,13 @@ function buildSkuSubtitle(v: Variant, category: Category): string {
     if (opts.connectivity) parts.push(String(opts.connectivity));
     return parts.join(' • ');
   }
+  if (category === 'MacBook') {
+    const parts: string[] = [];
+    if (opts.chip) parts.push(String(opts.chip));
+    if (opts.memStorage) parts.push(String(opts.memStorage));
+    if (opts.colorLabel) parts.push(String(opts.colorLabel));
+    return parts.join(' • ');
+  }
   return '';
 }
 

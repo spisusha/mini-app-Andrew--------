@@ -43,6 +43,14 @@ export default function SkuVariantScreen() {
     if (opts.colorLabel) parts.push(String(opts.colorLabel));
     if (opts.simType) parts.push(String(opts.simType));
     subtitleParts = parts;
+  } else if (family.category === 'MacBook') {
+    title = family.title;
+    const opts = variant.options || {};
+    const parts: string[] = [];
+    if (opts.chip) parts.push(String(opts.chip));
+    if (opts.memStorage) parts.push(String(opts.memStorage));
+    if (opts.colorLabel) parts.push(String(opts.colorLabel));
+    subtitleParts = parts;
   } else {
     title = family.title;
   }

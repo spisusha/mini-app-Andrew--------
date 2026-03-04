@@ -114,7 +114,7 @@ interface UpdateReport {
   notFoundCount: number;
   topNotFoundExamples: NotFoundEntry[];
   errors: string[];
-  skippedMacCount: number;
+  macbook: { updatedCount: number; createdCount: number; dedupHits: number; notFoundCount: number; examples: NotFoundEntry[]; createdExamples: { xmlid: string; description: string; family: string; chip: string; memStorage: string }[] };
   iphone: {
     matchedByXmlidCount: number; boundXmlidCount: number; ambiguousCount: number;
     notFoundCount: number; createdCount: number; dedupedHits: number;
@@ -128,6 +128,7 @@ interface UpdateReport {
   airpodsMax: { matchedCount: number; boundXmlidCount: number; createdCount: number; notFoundCount: number; examples: NotFoundEntry[] };
   other: { updatedCount: number; notFoundCount: number };
   verify: VerifyEntry[];
+  debugMacbook?: { xmlid: string; desc: string; parsed: { familyTitle: string; line: string; size: string; chip?: string; memStorage?: string; colorLabel?: string } | null; action: string }[];
 }
 type UpdateMode = 'prices_only' | 'sync_stock';
 
@@ -139,6 +140,7 @@ function guessCategory(desc: string): string {
   if (/airpods|air\s?pods/.test(d)) return 'airpods';
   if (/watch/.test(d)) return 'watch';
   if (/imac|mac\s?pro|mac\s?mini|mac\s?studio/.test(d)) return 'mac';
+  if (!/(iphone|ipad|watch|airpods)/i.test(d) && /\b(air|pro)\b/i.test(d) && /\b(m[1-5])\b/i.test(d) && /\b(1[3-6])\b/.test(d)) return 'macbook';
   return 'other';
 }
 
@@ -249,6 +251,42 @@ function PriceReport({ report }: { report: UpdateReport }) {
             )}
           </div>
         )}
+        {report.macbook && (
+          <div className="admin-stat-card">
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>MacBook</span>
+            <span className="admin-stat-label">
+              Обн: {report.macbook.updatedCount} · Созд: {report.macbook.createdCount}
+              {report.macbook.dedupHits > 0 && <> · Дедуп: {report.macbook.dedupHits}</>}
+              {report.macbook.notFoundCount > 0 && <> · НФ: {report.macbook.notFoundCount}</>}
+            </span>
+          </div>
+        )}
+        {report.debugMacbook && report.debugMacbook.length > 0 && (
+          <div className="admin-stat-card" style={{ overflowX: 'auto' }}>
+            <span className="admin-stat-label" style={{ fontWeight: 600 }}>Debug MacBook ({report.debugMacbook.length})</span>
+            <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                  <th>xmlid</th><th>desc</th><th>line</th><th>size</th><th>chip</th><th>mem</th><th>color</th><th>action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.debugMacbook.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                    <td>{r.xmlid}</td>
+                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.desc}</td>
+                    <td>{r.parsed?.line ?? '-'}</td>
+                    <td>{r.parsed?.size ?? '-'}</td>
+                    <td>{r.parsed?.chip ?? '-'}</td>
+                    <td>{r.parsed?.memStorage ?? '-'}</td>
+                    <td>{r.parsed?.colorLabel ?? '-'}</td>
+                    <td>{r.action}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {report.ipad && (
           <div className="admin-stat-card">
             <span className="admin-stat-label" style={{ fontWeight: 600 }}>iPad</span>
@@ -287,15 +325,10 @@ function PriceReport({ report }: { report: UpdateReport }) {
             <span className="admin-stat-label">Обн: {report.other.updatedCount} · Не найдено: {report.other.notFoundCount}</span>
           </div>
         )}
-        {((report.skippedMacCount || 0) > 0 || report.iphone?.skippedOldCount > 0) && (
+        {report.iphone?.skippedOldCount > 0 && (
           <div className="admin-stat-card" style={{ flex: '1 1 100%', opacity: 0.7 }}>
             <span className="admin-stat-label" style={{ fontWeight: 600 }}>Пропущено</span>
-            <span className="admin-stat-label">
-              {[
-                (report.skippedMacCount || 0) > 0 && `Mac: ${report.skippedMacCount}`,
-                report.iphone?.skippedOldCount > 0 && `Старые iPhone: ${report.iphone.skippedOldCount}`,
-              ].filter(Boolean).join(' · ')}
-            </span>
+            <span className="admin-stat-label">Старые iPhone: {report.iphone.skippedOldCount}</span>
           </div>
         )}
       </div>
@@ -495,7 +528,7 @@ function PricesTab() {
 
 import { formatWatchDisplay } from '../domain/watchFormat';
 
-type MediaMode = 'iphone' | 'ipad' | 'watch' | 'airpods_sku' | 'airpods_max';
+type MediaMode = 'iphone' | 'ipad' | 'macbook' | 'watch' | 'airpods_sku' | 'airpods_max';
 interface Family { id: string; title: string; category?: string }
 interface VariantRow { id: string; options: Record<string, string>; images: string[] | null }
 
@@ -518,6 +551,10 @@ function MediaTab() {
             <input type="radio" name="mediaKind" checked={mediaMode === 'ipad'} onChange={() => setMediaMode('ipad')} />
             iPad (по цвету)
           </label>
+          <label className={`media-mode-opt${mediaMode === 'macbook' ? ' active' : ''}`}>
+            <input type="radio" name="mediaKind" checked={mediaMode === 'macbook'} onChange={() => setMediaMode('macbook')} />
+            MacBook (по SKU)
+          </label>
           <label className={`media-mode-opt${mediaMode === 'watch' ? ' active' : ''}`}>
             <input type="radio" name="mediaKind" checked={mediaMode === 'watch'} onChange={() => setMediaMode('watch')} />
             Watch (по SKU)
@@ -534,6 +571,7 @@ function MediaTab() {
       </div>
       {mediaMode === 'iphone' && <IPhoneMediaSection />}
       {mediaMode === 'ipad' && <ColorMediaSection category="ipad" storagePath="ipad" label="iPad" />}
+      {mediaMode === 'macbook' && <SkuMediaSection category="macbook" storagePath="macbook" label="MacBook" />}
       {mediaMode === 'watch' && <SkuMediaSection category="watch" storagePath="watch" label="Watch" />}
       {mediaMode === 'airpods_sku' && <SkuMediaSection category="airpods" storagePath="airpods" label="AirPods" filterMax={false} />}
       {mediaMode === 'airpods_max' && <ColorMediaSection category="airpods" storagePath="airpods_max" label="AirPods Max" filterTitle="Max" />}

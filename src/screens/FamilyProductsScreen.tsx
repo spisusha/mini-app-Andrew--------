@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useCatalogStore } from '../store/catalogStore';
 import type { Category, Variant } from '../domain/types';
@@ -63,7 +63,29 @@ export default function FamilyProductsScreen() {
     return [...seen.values()];
   }, [familyVariants]);
 
-  const sorted = [...deduped].sort((a, b) => {
+  const isMacBook = family.category === 'MacBook';
+
+  const [chipFilter, setChipFilter] = useState<string | null>(null);
+
+  const chipGroups = useMemo(() => {
+    if (!isMacBook) return [];
+    const s = new Set<string>();
+    for (const v of deduped) {
+      const raw = String(v.options.chip || '').trim();
+      if (raw) s.add(raw.split(' ')[0]);
+    }
+    return [...s].sort();
+  }, [deduped, isMacBook]);
+
+  const filtered = useMemo(() => {
+    if (!isMacBook || !chipFilter) return deduped;
+    return deduped.filter((v) => {
+      const raw = String(v.options.chip || '').trim();
+      return raw.split(' ')[0] === chipFilter;
+    });
+  }, [deduped, isMacBook, chipFilter]);
+
+  const sorted = [...filtered].sort((a, b) => {
     if (a.in_stock !== b.in_stock) return a.in_stock ? -1 : 1;
     return a.price - b.price;
   });
@@ -76,6 +98,15 @@ export default function FamilyProductsScreen() {
         </button>
         <h1 className="page-title" style={{ marginBottom: 0 }}>{family.title}</h1>
       </div>
+
+      {isMacBook && chipGroups.length > 1 && (
+        <div className="catalog-filters" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 0' }}>
+          <button className={`cat-chip${!chipFilter ? ' cat-chip--active' : ''}`} onClick={() => setChipFilter(null)}>Все чипы</button>
+          {chipGroups.map((c) => (
+            <button key={c} className={`cat-chip${chipFilter === c ? ' cat-chip--active' : ''}`} onClick={() => setChipFilter(c)}>{c}</button>
+          ))}
+        </div>
+      )}
 
       <p className="catalog-family-stats">{sorted.length} позиций</p>
 
