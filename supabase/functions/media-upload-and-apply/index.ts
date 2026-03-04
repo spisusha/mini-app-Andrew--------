@@ -10,6 +10,27 @@ interface RequestBody {
   setAsCover?: boolean;
 }
 
+function normalizeColorKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
+interface FamilyImages {
+  cover: string[];
+  byColor: Record<string, string[]>;
+}
+
+function parseFamilyImages(raw: unknown): FamilyImages {
+  if (Array.isArray(raw)) return { cover: raw as string[], byColor: {} };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    return {
+      cover: Array.isArray(obj.cover) ? (obj.cover as string[]) : [],
+      byColor: (obj.byColor as Record<string, string[]>) || {},
+    };
+  }
+  return { cover: [], byColor: {} };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -33,46 +54,39 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { data: variants, error: fetchErr } = await supabase
-      .from('variants')
-      .select('id, images')
-      .eq('family_id', familyId)
-      .eq('options->>colorLabel', colorLabel);
+    const colorKey = normalizeColorKey(colorLabel);
 
-    if (fetchErr) throw new Error(fetchErr.message);
-    if (!variants || variants.length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'No variants found for this color' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
+    const { data: famRow, error: famErr } = await supabase
+      .from('product_families')
+      .select('images')
+      .eq('id', familyId)
+      .single();
+    if (famErr) throw new Error(famErr.message);
+
+    const fi = parseFamilyImages(famRow?.images);
 
     let savedUrls: string[];
     if (mode === 'replace') {
       savedUrls = publicUrls;
     } else {
-      const existing: string[] = (variants[0].images as string[]) || [];
+      const existing = fi.byColor[colorKey] || [];
       savedUrls = [...new Set([...existing, ...publicUrls])];
     }
+    fi.byColor[colorKey] = savedUrls;
 
-    const ids = variants.map((v: { id: string }) => v.id);
+    if (setAsCover) {
+      fi.cover = savedUrls;
+    }
+
     const { error: updateErr } = await supabase
-      .from('variants')
-      .update({ images: savedUrls, updated_at: new Date().toISOString() })
-      .in('id', ids);
+      .from('product_families')
+      .update({ images: fi })
+      .eq('id', familyId);
 
     if (updateErr) throw new Error(updateErr.message);
 
-    if (setAsCover) {
-      const { error: coverErr } = await supabase
-        .from('product_families')
-        .update({ images: savedUrls })
-        .eq('id', familyId);
-      if (coverErr) throw new Error(coverErr.message);
-    }
-
     return new Response(
-      JSON.stringify({ updatedVariantsCount: ids.length, savedUrls }),
+      JSON.stringify({ ok: true, colorKey, savedUrls, coverUpdated: !!setAsCover }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {

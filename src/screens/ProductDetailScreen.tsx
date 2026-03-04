@@ -42,7 +42,7 @@ export default function ProductDetailScreen() {
     displayImages,
     imgIdx,
     setImgIdx,
-  } = useConfigurator(familyVariants, family?.images ?? []);
+  } = useConfigurator(familyVariants, family?.images ?? [], family);
 
   if (loading || !family) return <Loader />;
 
@@ -56,7 +56,7 @@ export default function ProductDetailScreen() {
       titleSnapshot: family.title,
       optionsSnapshot: resolvedVariant.options,
       priceSnapshot: resolvedVariant.price,
-      image: displayImages[0] || family.images[0] || '',
+      image: displayImages[0] || family?.images[0] || '',
     });
     setAdded(true);
     setTimeout(() => setAdded(false), 1500);

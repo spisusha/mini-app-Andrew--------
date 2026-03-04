@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Category, ProductFamily, Variant } from '../domain/types';
 import { getMinPrice, hasStock } from '../domain/catalogLogic';
 import { formatWatchDisplay } from '../domain/watchFormat';
+import { getFirstImage } from '../domain/imageUtils';
 import './ProductCard.css';
 
 function formatStorage(gb: number): string {
@@ -60,7 +61,7 @@ export default function ProductCard({ family, variants, skuVariant }: Props) {
       <div className="product-card" onClick={() => navigate(`/variant/${skuVariant.id}`)}>
         <div className="product-card__img-wrap">
           <img
-            src={skuVariant.images?.[0] || family.images[0] || '/placeholder.png'}
+            src={getFirstImage(skuVariant, family)}
             alt={title}
             loading="lazy"
           />
@@ -88,7 +89,7 @@ export default function ProductCard({ family, variants, skuVariant }: Props) {
     <div className="product-card" onClick={() => navigate(`/product/${family.id}`)}>
       <div className="product-card__img-wrap">
         <img
-          src={family.images[0] || '/placeholder.png'}
+          src={getFirstImage(null, family)}
           alt={family.title}
           loading="lazy"
         />

@@ -7,19 +7,20 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { pin } = (await req.json()) as { pin?: string };
+    const body = (await req.json()) as { pin?: string; password?: string };
+    const input = body.password ?? body.pin ?? '';
 
-    const correctPin = Deno.env.get('ADMIN_PIN');
-    if (!correctPin) {
+    const secret = Deno.env.get('ADMIN_PASSWORD') ?? Deno.env.get('ADMIN_PIN');
+    if (!secret) {
       return new Response(
-        JSON.stringify({ error: 'ADMIN_PIN not configured on server' }),
+        JSON.stringify({ error: 'ADMIN_PASSWORD not set' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    if (!pin || pin !== correctPin) {
+    if (!input || input !== secret) {
       return new Response(
-        JSON.stringify({ error: 'Invalid PIN' }),
+        JSON.stringify({ error: 'Invalid password' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }

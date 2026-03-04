@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import type { Variant } from '../domain/types';
+import type { ProductFamily, Variant } from '../domain/types';
+import { normalizeColorKey } from '../domain/imageUtils';
 
 export const CONF_COLOR_KEYS = new Set(['color', 'colorHex', 'colorLabel']);
 export const CONF_SERVICE_KEYS = new Set(['raw', 'supplierTitle', 'line', 'market', '_xmlid_audit', 'chip', 'model', 'ruKeyboard']);
@@ -82,7 +83,7 @@ function pickBestVariant(
   return variants.find((v) => Object.entries(required).every(([k, val]) => eq(v.options[k], val))) ?? null;
 }
 
-export function useConfigurator(variants: Variant[], familyImages: string[]): ConfiguratorState {
+export function useConfigurator(variants: Variant[], familyImages: string[], family?: ProductFamily | null): ConfiguratorState {
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string | undefined>>({});
   const [imgIdx, setImgIdx] = useState(0);
 
@@ -197,11 +198,13 @@ export function useConfigurator(variants: Variant[], familyImages: string[]): Co
     if (resolvedVariant?.images?.length) return resolvedVariant.images;
     const colorLabel = selectedOptions.colorLabel;
     if (colorLabel) {
+      const ck = normalizeColorKey(selectedOptions.color) || normalizeColorKey(colorLabel);
+      if (ck && family?.imagesByColor?.[ck]?.length) return family.imagesByColor[ck];
       const match = variants.find((v) => v.options.colorLabel === colorLabel && v.images?.length);
       if (match?.images?.length) return match.images;
     }
     return familyImages;
-  }, [resolvedVariant, selectedOptions.colorLabel, variants, familyImages]);
+  }, [resolvedVariant, selectedOptions.colorLabel, selectedOptions.color, variants, familyImages, family]);
 
   const handleColorSelect = (entry: ColorEntry) => {
     setImgIdx(0);

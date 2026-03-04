@@ -14,6 +14,18 @@ function normalizeCategory(raw: string): Category {
   return CATEGORY_MAP[raw.toLowerCase()] ?? (raw as Category);
 }
 
+function normalizeFamilyImages(raw: unknown): { images: string[]; imagesByColor: Record<string, string[]> } {
+  if (Array.isArray(raw)) return { images: raw as string[], imagesByColor: {} };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    return {
+      images: Array.isArray(obj.cover) ? (obj.cover as string[]) : [],
+      imagesByColor: (obj.byColor as Record<string, string[]>) || {},
+    };
+  }
+  return { images: [], imagesByColor: {} };
+}
+
 export async function fetchFamilies(): Promise<ProductFamily[]> {
   if (!supabase) return mockFamilies;
   const { data, error } = await supabase
@@ -24,10 +36,10 @@ export async function fetchFamilies(): Promise<ProductFamily[]> {
     console.error('fetchFamilies error', error);
     return mockFamilies;
   }
-  return (data as ProductFamily[]).map((f) => ({
-    ...f,
-    category: normalizeCategory(f.category),
-  }));
+  return (data as ProductFamily[]).map((f) => {
+    const { images, imagesByColor } = normalizeFamilyImages((f as any).images);
+    return { ...f, category: normalizeCategory(f.category), images, imagesByColor };
+  });
 }
 
 export async function fetchVariants(): Promise<Variant[]> {
@@ -49,7 +61,8 @@ export async function fetchFamilyById(id: string): Promise<ProductFamily | null>
     .single();
   if (error) return null;
   const f = data as ProductFamily;
-  return { ...f, category: normalizeCategory(f.category) };
+  const { images, imagesByColor } = normalizeFamilyImages((f as any).images);
+  return { ...f, category: normalizeCategory(f.category), images, imagesByColor };
 }
 
 export async function fetchVariantsByFamily(familyId: string): Promise<Variant[]> {

@@ -9,6 +9,20 @@ interface RequestBody {
   deleteFromStorage?: boolean;
 }
 
+function normalizeColorKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
+interface FamilyImages { cover: string[]; byColor: Record<string, string[]> }
+function parseFamilyImages(raw: unknown): FamilyImages {
+  if (Array.isArray(raw)) return { cover: raw as string[], byColor: {} };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    return { cover: Array.isArray(obj.cover) ? (obj.cover as string[]) : [], byColor: (obj.byColor as Record<string, string[]>) || {} };
+  }
+  return { cover: [], byColor: {} };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -32,32 +46,26 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { data: variants, error: fetchErr } = await supabase
-      .from('variants')
-      .select('id, images')
-      .eq('family_id', familyId)
-      .eq('options->>colorLabel', colorLabel);
+    const colorKey = normalizeColorKey(colorLabel);
 
-    if (fetchErr) throw new Error(fetchErr.message);
-    if (!variants || variants.length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'No variants found' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
+    const { data: famRow, error: famErr } = await supabase
+      .from('product_families')
+      .select('images')
+      .eq('id', familyId)
+      .single();
+    if (famErr) throw new Error(famErr.message);
 
-    const existing: string[] = (variants[0].images as string[]) || [];
-    const updated = existing.filter((u) => u !== urlToRemove);
+    const fi = parseFamilyImages(famRow?.images);
+    const existing = fi.byColor[colorKey] || [];
+    fi.byColor[colorKey] = existing.filter((u) => u !== urlToRemove);
+    fi.cover = fi.cover.filter((u) => u !== urlToRemove);
 
-    const ids = variants.map((v: { id: string }) => v.id);
     const { error: updateErr } = await supabase
-      .from('variants')
-      .update({ images: updated, updated_at: new Date().toISOString() })
-      .in('id', ids);
-
+      .from('product_families')
+      .update({ images: fi })
+      .eq('id', familyId);
     if (updateErr) throw new Error(updateErr.message);
 
-    // Try to delete from storage
     if (deleteFromStorage) {
       try {
         const bucketBase = `/storage/v1/object/public/products/`;
@@ -66,13 +74,11 @@ Deno.serve(async (req) => {
           const path = urlToRemove.slice(idx + bucketBase.length);
           await supabase.storage.from('products').remove([decodeURIComponent(path)]);
         }
-      } catch {
-        // Non-critical: image stays in storage
-      }
+      } catch { /* non-critical */ }
     }
 
     return new Response(
-      JSON.stringify({ updatedVariantsCount: ids.length }),
+      JSON.stringify({ ok: true, colorKey, remaining: fi.byColor[colorKey] }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {

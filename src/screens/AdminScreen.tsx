@@ -554,7 +554,7 @@ function MediaTab() {
           </label>
           <label className={`media-mode-opt${mediaMode === 'macbook' ? ' active' : ''}`}>
             <input type="radio" name="mediaKind" checked={mediaMode === 'macbook'} onChange={() => setMediaMode('macbook')} />
-            MacBook (по SKU)
+            MacBook (по цвету)
           </label>
           <label className={`media-mode-opt${mediaMode === 'watch' ? ' active' : ''}`}>
             <input type="radio" name="mediaKind" checked={mediaMode === 'watch'} onChange={() => setMediaMode('watch')} />
@@ -572,7 +572,7 @@ function MediaTab() {
       </div>
       {mediaMode === 'iphone' && <IPhoneMediaSection />}
       {mediaMode === 'ipad' && <ColorMediaSection category="ipad" storagePath="ipad" label="iPad" />}
-      {mediaMode === 'macbook' && <SkuMediaSection category="macbook" storagePath="macbook" label="MacBook" />}
+      {mediaMode === 'macbook' && <ColorMediaSection category="macbook" storagePath="macbook" label="MacBook" />}
       {mediaMode === 'watch' && <SkuMediaSection category="watch" storagePath="watch" label="Watch" />}
       {mediaMode === 'airpods_sku' && <SkuMediaSection category="airpods" storagePath="airpods" label="AirPods" filterMax={false} />}
       {mediaMode === 'airpods_max' && <ColorMediaSection category="airpods" storagePath="airpods_max" label="AirPods Max" filterTitle="Max" />}
@@ -583,193 +583,7 @@ function MediaTab() {
 // ── iPhone media (existing, unchanged logic) ─────────────────────────
 
 function IPhoneMediaSection() {
-  const auth = getAuth()!;
-
-  const [families, setFamilies] = useState<Family[]>([]);
-  const [familyId, setFamilyId] = useState('');
-  const [variants, setVariants] = useState<VariantRow[]>([]);
-  const [colors, setColors] = useState<string[]>([]);
-  const [colorLabel, setColorLabel] = useState('');
-  const [currentImages, setCurrentImages] = useState<string[]>([]);
-
-  const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
-  const [mode, setMode] = useState<'append' | 'replace'>('append');
-  const [setAsCover, setSetAsCover] = useState(false);
-
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!supabase) return;
-    supabase.from('product_families').select('id, title').eq('category', 'iphone').order('title').then(({ data }) => { if (data) setFamilies(data); });
-  }, []);
-
-  useEffect(() => {
-    if (!supabase || !familyId) { setVariants([]); setColors([]); setColorLabel(''); return; }
-    supabase.from('variants').select('id, options, images').eq('family_id', familyId).then(({ data }) => {
-      const rows = (data || []) as VariantRow[];
-      setVariants(rows);
-      setColors([...new Set(rows.map((v) => v.options?.colorLabel).filter(Boolean))].sort() as string[]);
-      setColorLabel('');
-    });
-  }, [familyId]);
-
-  useEffect(() => {
-    if (!colorLabel || variants.length === 0) { setCurrentImages([]); return; }
-    const match = variants.find((v) => v.options?.colorLabel === colorLabel);
-    setCurrentImages((match?.images as string[]) || []);
-  }, [colorLabel, variants]);
-
-  const handleFiles = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = Array.from(e.target.files || []).slice(0, 10);
-    setFiles(selected);
-    setPreviews(selected.map((f) => URL.createObjectURL(f)));
-  }, []);
-
-  useEffect(() => { return () => previews.forEach((u) => URL.revokeObjectURL(u)); }, [previews]);
-
-  const refreshImages = useCallback(async () => {
-    if (!supabase || !familyId || !colorLabel) return;
-    const { data } = await supabase.from('variants').select('images').eq('family_id', familyId).eq('options->>colorLabel', colorLabel).limit(1);
-    setCurrentImages((data?.[0]?.images as string[]) || []);
-  }, [familyId, colorLabel]);
-
-  const handleUpload = async () => {
-    if (!supabase || files.length === 0 || !familyId || !colorLabel) return;
-    setUploading(true); setError(''); setMessage('');
-    try {
-      const slug = colorSlug(colorLabel);
-      const urls: string[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setProgress(`Загрузка ${i + 1}/${files.length}: ${file.name}`);
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const path = `iphone/${familyId}/${slug}/${Date.now()}-${safeName}`;
-        const { error: upErr } = await supabase.storage.from('products').upload(path, file, { upsert: true });
-        if (upErr) throw new Error(`Upload ${file.name}: ${upErr.message}`);
-        const { data: { publicUrl } } = supabase.storage.from('products').getPublicUrl(path);
-        urls.push(publicUrl);
-      }
-      setProgress('Применение к вариантам...');
-      const result = await callFn<{ updatedVariantsCount: number; savedUrls: string[] }>(
-        'media-upload-and-apply', { familyId, colorLabel, mode, publicUrls: urls, setAsCover }, auth.token,
-      );
-      setMessage(`Готово! Обновлено ${result.updatedVariantsCount} вариантов, ${result.savedUrls.length} фото.`);
-      setFiles([]); setPreviews([]);
-      if (fileRef.current) fileRef.current.value = '';
-      await refreshImages();
-    } catch (err) { setError(err instanceof Error ? err.message : 'Upload failed'); }
-    finally { setUploading(false); setProgress(''); }
-  };
-
-  const handleRemove = async (url: string) => {
-    if (!confirm('Удалить это изображение?')) return;
-    setError('');
-    try {
-      await callFn('media-remove-image', { familyId, colorLabel, urlToRemove: url, deleteFromStorage: true }, auth.token);
-      await refreshImages(); setMessage('Изображение удалено');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Remove failed'); }
-  };
-
-  const handleClear = async () => {
-    if (!confirm(`Очистить все фото для "${colorLabel}"?`)) return;
-    setError('');
-    try {
-      await callFn('media-clear-color', { familyId, colorLabel }, auth.token);
-      await refreshImages(); setMessage('Все фото цвета очищены');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Clear failed'); }
-  };
-
-  const handleSetCover = async () => {
-    if (currentImages.length === 0) return;
-    if (!confirm('Установить текущие фото цвета как обложку товара?')) return;
-    setError('');
-    try {
-      await callFn('media-set-family-cover', { familyId, mode: 'replace', publicUrls: currentImages }, auth.token);
-      setMessage('Обложка товара обновлена');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Cover update failed'); }
-  };
-
-  return (
-    <>
-      <div className="media-section">
-        <label className="media-label">Модель</label>
-        <select className="media-select" value={familyId} onChange={(e) => setFamilyId(e.target.value)}>
-          <option value="">— Выберите модель —</option>
-          {families.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
-        </select>
-      </div>
-
-      {colors.length > 0 && (
-        <div className="media-section">
-          <label className="media-label">Цвет</label>
-          <select className="media-select" value={colorLabel} onChange={(e) => setColorLabel(e.target.value)}>
-            <option value="">— Выберите цвет —</option>
-            {colors.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-      )}
-
-      {colorLabel && (
-        <div className="media-section">
-          <h3 className="media-subtitle">Текущие фото ({currentImages.length})</h3>
-          {currentImages.length === 0 ? (
-            <p className="media-empty">Нет фото для этого цвета</p>
-          ) : (
-            <div className="media-grid">
-              {currentImages.map((url, i) => (
-                <div key={i} className="media-card">
-                  <img src={url} alt={`${colorLabel} ${i + 1}`} className="media-card__img" />
-                  <div className="media-card__actions">
-                    <span className="media-card__idx">#{i + 1}</span>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleRemove(url)}>Удалить</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="media-toolbar">
-            <button className="btn btn-outline btn-sm" onClick={handleSetCover} disabled={currentImages.length === 0}>Установить как обложку</button>
-            <button className="btn btn-outline btn-sm btn-danger-outline" onClick={handleClear} disabled={currentImages.length === 0}>Очистить все фото цвета</button>
-          </div>
-        </div>
-      )}
-
-      {colorLabel && (
-        <div className="media-section">
-          <h3 className="media-subtitle">Загрузка</h3>
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={handleFiles} className="media-file-input" />
-          {previews.length > 0 && (
-            <div className="media-previews">
-              {previews.map((src, i) => <img key={i} src={src} alt={`preview ${i + 1}`} className="media-preview-img" />)}
-            </div>
-          )}
-          <div className="media-mode">
-            <label className={`media-mode-opt${mode === 'append' ? ' active' : ''}`}>
-              <input type="radio" name="iphoneMediaMode" checked={mode === 'append'} onChange={() => setMode('append')} /> Добавить к существующим
-            </label>
-            <label className={`media-mode-opt${mode === 'replace' ? ' active' : ''}`}>
-              <input type="radio" name="iphoneMediaMode" checked={mode === 'replace'} onChange={() => setMode('replace')} /> Заменить полностью
-            </label>
-          </div>
-          <label className="media-checkbox">
-            <input type="checkbox" checked={setAsCover} onChange={(e) => setSetAsCover(e.target.checked)} />
-            Также установить как обложку модели
-          </label>
-          <button className="btn btn-primary btn-block" disabled={uploading || files.length === 0} onClick={handleUpload}>
-            {uploading ? progress || 'Загрузка...' : `Загрузить и применить (${files.length} файлов)`}
-          </button>
-        </div>
-      )}
-
-      {error && <p className="admin-error">{error}</p>}
-      {message && <p className="media-success">{message}</p>}
-    </>
-  );
+  return <ColorMediaSection category="iphone" storagePath="iphone" label="iPhone" />;
 }
 
 // ── Generic SKU media (Watch / AirPods non-Max) ─────────────────────
@@ -1015,7 +829,7 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
 
   useEffect(() => {
     if (!supabase || !familyId) { setVariants([]); setColors([]); setColorLabel(''); return; }
-    supabase.from('variants').select('id, options, images').eq('family_id', familyId).then(({ data }) => {
+    supabase.from('variants').select('id, options').eq('family_id', familyId).then(({ data }) => {
       const rows = (data || []) as VariantRow[];
       setVariants(rows);
       setColors([...new Set(rows.map((v) => v.options?.colorLabel).filter(Boolean))].sort() as string[]);
@@ -1023,11 +837,21 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
     });
   }, [familyId]);
 
-  useEffect(() => {
-    if (!colorLabel || variants.length === 0) { setCurrentImages([]); return; }
-    const match = variants.find((v) => v.options?.colorLabel === colorLabel);
-    setCurrentImages((match?.images as string[]) || []);
-  }, [colorLabel, variants]);
+  const loadFamilyColorImages = useCallback(async () => {
+    if (!supabase || !familyId || !colorLabel) { setCurrentImages([]); return; }
+    const ck = colorSlug(colorLabel);
+    const { data } = await supabase.from('product_families').select('images').eq('id', familyId).single();
+    if (!data) { setCurrentImages([]); return; }
+    const raw = data.images;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const byColor = (raw as Record<string, unknown>).byColor as Record<string, string[]> | undefined;
+      setCurrentImages(byColor?.[ck] || []);
+    } else {
+      setCurrentImages([]);
+    }
+  }, [familyId, colorLabel]);
+
+  useEffect(() => { loadFamilyColorImages(); }, [loadFamilyColorImages]);
 
   const handleFiles = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files || []).slice(0, 10);
@@ -1036,12 +860,6 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
   }, []);
 
   useEffect(() => { return () => previews.forEach((u) => URL.revokeObjectURL(u)); }, [previews]);
-
-  const refreshImages = useCallback(async () => {
-    if (!supabase || !familyId || !colorLabel) return;
-    const { data } = await supabase.from('variants').select('images').eq('family_id', familyId).eq('options->>colorLabel', colorLabel).limit(1);
-    setCurrentImages((data?.[0]?.images as string[]) || []);
-  }, [familyId, colorLabel]);
 
   const handleUpload = async () => {
     if (!supabase || files.length === 0 || !familyId || !colorLabel) return;
@@ -1059,14 +877,14 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
         const { data: { publicUrl } } = supabase.storage.from('products').getPublicUrl(path);
         urls.push(publicUrl);
       }
-      setProgress('Применение к вариантам...');
-      const result = await callFn<{ updatedVariantsCount: number; savedUrls: string[] }>(
+      setProgress('Сохранение...');
+      const result = await callFn<{ ok: boolean; savedUrls: string[] }>(
         'media-upload-and-apply', { familyId, colorLabel, mode, publicUrls: urls, setAsCover }, auth.token,
       );
-      setMessage(`Готово! Обновлено ${result.updatedVariantsCount} вариантов, ${result.savedUrls.length} фото.`);
+      setMessage(`Готово! Сохранено ${result.savedUrls.length} фото на цвет "${colorLabel}".`);
       setFiles([]); setPreviews([]);
       if (fileRef.current) fileRef.current.value = '';
-      await refreshImages();
+      await loadFamilyColorImages();
     } catch (err) { setError(err instanceof Error ? err.message : 'Upload failed'); }
     finally { setUploading(false); setProgress(''); }
   };
@@ -1076,7 +894,7 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
     setError('');
     try {
       await callFn('media-remove-image', { familyId, colorLabel, urlToRemove: url, deleteFromStorage: true }, auth.token);
-      await refreshImages(); setMessage('Изображение удалено');
+      await loadFamilyColorImages(); setMessage('Изображение удалено');
     } catch (err) { setError(err instanceof Error ? err.message : 'Remove failed'); }
   };
 
@@ -1085,7 +903,7 @@ function ColorMediaSection({ category, storagePath, label, filterTitle }: {
     setError('');
     try {
       await callFn('media-clear-color', { familyId, colorLabel }, auth.token);
-      await refreshImages(); setMessage('Все фото цвета очищены');
+      await loadFamilyColorImages(); setMessage('Все фото цвета очищены');
     } catch (err) { setError(err instanceof Error ? err.message : 'Clear failed'); }
   };
 

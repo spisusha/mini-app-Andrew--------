@@ -4,6 +4,7 @@ export interface ProductFamily {
   title: string;
   description: string;
   images: string[];
+  imagesByColor?: Record<string, string[]>;
   popularity_score: number;
   created_at: string;
 }

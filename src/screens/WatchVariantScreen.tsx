@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useCatalogStore } from '../store/catalogStore';
 import { useCartStore } from '../store/cartStore';
 import { formatWatchDisplay } from '../domain/watchFormat';
+import { getDisplayImages } from '../domain/imageUtils';
 import Loader from '../components/Loader';
 import './ProductDetailScreen.css';
 
@@ -56,7 +57,7 @@ export default function SkuVariantScreen() {
     title = family.title;
   }
 
-  const images = variant.images?.length ? variant.images : family.images;
+  const images = getDisplayImages(variant, family);
 
   const handleAdd = () => {
     const subtitle = subtitleParts.join(' • ');

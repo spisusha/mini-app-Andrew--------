@@ -8,6 +8,23 @@ interface RequestBody {
   publicUrls: string[];
 }
 
+interface FamilyImages {
+  cover: string[];
+  byColor: Record<string, string[]>;
+}
+
+function parseFamilyImages(raw: unknown): FamilyImages {
+  if (Array.isArray(raw)) return { cover: raw as string[], byColor: {} };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    return {
+      cover: Array.isArray(obj.cover) ? (obj.cover as string[]) : [],
+      byColor: (obj.byColor as Record<string, string[]>) || {},
+    };
+  }
+  return { cover: [], byColor: {} };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -30,29 +47,30 @@ Deno.serve(async (req) => {
       );
     }
 
-    let finalUrls: string[];
+    const { data, error: fetchErr } = await supabase
+      .from('product_families')
+      .select('images')
+      .eq('id', familyId)
+      .single();
+    if (fetchErr) throw new Error(fetchErr.message);
+
+    const fi = parseFamilyImages(data?.images);
+
     if (mode === 'append') {
-      const { data, error: fetchErr } = await supabase
-        .from('product_families')
-        .select('images')
-        .eq('id', familyId)
-        .single();
-      if (fetchErr) throw new Error(fetchErr.message);
-      const existing: string[] = (data?.images as string[]) || [];
-      finalUrls = [...new Set([...existing, ...publicUrls])];
+      fi.cover = [...new Set([...fi.cover, ...publicUrls])];
     } else {
-      finalUrls = publicUrls;
+      fi.cover = publicUrls;
     }
 
     const { error: updateErr } = await supabase
       .from('product_families')
-      .update({ images: finalUrls })
+      .update({ images: fi })
       .eq('id', familyId);
 
     if (updateErr) throw new Error(updateErr.message);
 
     return new Response(
-      JSON.stringify({ ok: true, images: finalUrls }),
+      JSON.stringify({ ok: true, images: fi.cover }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
